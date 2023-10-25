@@ -9,3 +9,20 @@ conda activate single-image-bg-detector
 ```shell
 python main.py
 ```
+
+### Set up docker env:
+Setup
+```shell
+docker build -t ajevnisek/single-image-bg-detector --file docker/Dockerfile .
+docker tag ajevnisek/single-image-bg-detector ajevnisek/single-image-bg-detector:v1
+docker push ajevnisek/single-image-bg-detector:v1
+```
+
+Run:
+```shell
+docker run -v $(pwd)/docker_results:/home/code/results -it ajevnisek/single-image-bg-detector:v2 /bin/bash
+```
+and when the docker runs, hit:
+```shell
+python main.py
+```
