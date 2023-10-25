@@ -8,6 +8,7 @@ FROM nvidia/cuda:11.0.3-base-ubuntu${UBUNTU_VER}
 
 # System packages
 RUN apt-get update && \
+    apt-get install ffmpeg libsm6 libxext6  -y && \
     apt-get install -yq curl wget jq vim git tree && \
     apt-get install openssh-server sudo -y && \
     apt-get clean && \
