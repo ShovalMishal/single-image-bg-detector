@@ -1,4 +1,8 @@
 # Single Image Background Detector
+*Important Note:*: clone this repo using:
+```shell
+git clone --recursive https://github.com/ajevnisek/single-image-bg-detector.git
+```
 ## Install:
 create conda environment:
 ```shell
@@ -20,7 +24,7 @@ docker push ajevnisek/single-image-bg-detector:v1
 
 Run:
 ```shell
-docker run -v $(pwd)/docker_results:/home/code/results -it ajevnisek/single-image-bg-detector:v2 /bin/bash
+docker run -v $(pwd)/docker_results:/home/code/results -it ajevnisek/single-image-bg-detector:v1 /bin/bash
 ```
 and when the docker runs, hit:
 ```shell
