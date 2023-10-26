@@ -12,8 +12,8 @@ from skimage.util import view_as_windows
 def parse_args():
     parser = argparse.ArgumentParser(description="apply single image BG detection for the images in source dir and"
                                                  "output results to the target dir.")
-    parser.add_argument("source", help="Path to the source directory", default='DOTA_devkit/example')
-    parser.add_argument("target", help="Path to the target directory", default='results')
+    parser.add_argument("--source", help="Path to the source directory", default='DOTA_devkit/example')
+    parser.add_argument("--target", help="Path to the target directory", default='results')
 
     args = parser.parse_args()
     return args
