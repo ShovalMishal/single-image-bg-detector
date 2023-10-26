@@ -1,0 +1,1 @@
+python main.py --source $SOURCE_DIR --target $TARGET_DIR

@@ -1,4 +1,5 @@
 import os
+import argparse
 import numpy as np
 import skimage.measure
 import matplotlib.pyplot as plt
@@ -8,9 +9,14 @@ from scipy.spatial.distance import cdist
 from skimage.util import view_as_windows
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="apply single image BG detection for the images in source dir and"
+                                                 "output results to the target dir.")
+    parser.add_argument("source", help="Path to the source directory", default='DOTA_devkit/example')
+    parser.add_argument("target", help="Path to the target directory", default='results')
 
-RESULTS_DIR = 'results'
-os.makedirs(RESULTS_DIR, exist_ok=True)
+    args = parser.parse_args()
+    return args
 
 
 def find_bottom_k_indices(x, k):
@@ -31,8 +37,8 @@ def pad_image_to_divisible(image, P):
     return padded_image
 
 
-def load_image_and_annotations(dota_obj, imgid):
-    os.makedirs(os.path.join(RESULTS_DIR, imgid), exist_ok=True)
+def load_image_and_annotations(dota_obj, imgid, target_dir):
+    os.makedirs(os.path.join(target_dir, imgid), exist_ok=True)
     img = dota_obj.loadImgs(imgid)[0]
     anns = dota_obj.loadAnns(imgId=imgid)
     gsd = anns[0]['gsd']
@@ -52,8 +58,8 @@ def load_image_and_annotations(dota_obj, imgid):
     plt.imshow(ssd_matrix)
     plt.title(f'ssd matrix for {imgid}')
     plt.colorbar()
-    plt.savefig(os.path.join(RESULTS_DIR, imgid, 'ssd_matrix.png'))
-    np.save(os.path.join(RESULTS_DIR, imgid, 'ssd_matrix.npy'), ssd_matrix)
+    plt.savefig(os.path.join(target_dir, imgid, 'ssd_matrix.png'))
+    np.save(os.path.join(target_dir, imgid, 'ssd_matrix.npy'), ssd_matrix)
 
     for k in [2, 5, 10, 20, 50, 100, ]:
         k_ssd_distance = np.zeros((view.shape[0], view.shape[1])).flatten()
@@ -68,7 +74,7 @@ def load_image_and_annotations(dota_obj, imgid):
         plt.title(f'distance to {k}-th neighbour, image:{imgid}')
         plt.imshow(heatmap)
         plt.colorbar()
-        plt.savefig(os.path.join(RESULTS_DIR, imgid, f'distance_to_{k}-th_closest_neighbour.png'))
+        plt.savefig(os.path.join(target_dir, imgid, f'distance_to_{k}-th_closest_neighbour.png'))
 
         plt.clf()
         plt.subplot(1, 2, 1)
@@ -84,11 +90,15 @@ def load_image_and_annotations(dota_obj, imgid):
         fig = plt.gcf()
         fig.set_size_inches((8, 8))
         plt.tight_layout()
-        plt.savefig(os.path.join(RESULTS_DIR, imgid, f'{k}-th_neighbour_distance_overlaid_on_image.png'))
+        plt.savefig(os.path.join(target_dir, imgid, f'{k}-th_neighbour_distance_overlaid_on_image.png'))
 
 
 if __name__ == '__main__':
-    dota_obj = DOTA('DOTA_devkit/example')
+    args = parse_args()
+    source_dir = args.source
+    target_dir = args.target
+
+    dota_obj = DOTA(source_dir)
     imgids = dota_obj.getImgIds()
     for imgid in imgids:
-        load_image_and_annotations(dota_obj, imgid)
+        load_image_and_annotations(dota_obj, imgid, target_dir)
