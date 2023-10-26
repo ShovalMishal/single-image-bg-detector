@@ -27,8 +27,3 @@ ENV PATH=${CONDA_DIR}/bin:${PATH}
 COPY environment.yml .
 RUN conda update -y conda && \
     conda env update --file environment.yml --name base
-
-WORKDIR /home/code
-COPY . /home/code/
-
-CMD ["/bin/bash", "-c", "chmod +x run_me.sh && ./run_me.sh"]
