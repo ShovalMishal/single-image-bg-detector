@@ -50,6 +50,7 @@ def load_image_and_annotations(dota_obj, imgid, target_dir):
     block_shape = (ceil(block_shape_in_meter[0] / gsd), ceil(block_shape_in_meter[1] / gsd), 3)
     step_size = ceil(step_size_in_meters / gsd)
     padded_image = pad_image_to_divisible(img, block_shape[0])
+    padded_image_size = padded_image.shape
     view = view_as_windows(padded_image, block_shape, step=step_size)
     flatten_view = view.reshape(view.shape[0] * view.shape[1], -1).astype(np.float32) / 255.0
     print(flatten_view.shape)
@@ -79,8 +80,8 @@ def load_image_and_annotations(dota_obj, imgid, target_dir):
         plt.clf()
         plt.subplot(1, 2, 1)
         plt.title(f'distance to {k}-th neighbour, image:{imgid}')
-        extent = 0, img.shape[0], 0, img.shape[0]
-        plt.imshow(np.flipud(img))
+        extent = 0, padded_image_size[0], 0, padded_image_size[0]
+        plt.imshow(np.flipud(padded_image))
         plt.imshow(heatmap, alpha=.5, interpolation='bilinear',
                    extent=extent)
         plt.colorbar()
