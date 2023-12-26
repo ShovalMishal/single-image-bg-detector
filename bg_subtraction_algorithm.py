@@ -8,7 +8,7 @@ from bg_subtraction_with_dino_vit import bg_subtraction_with_dino_vit
 
 class AlgorithmType(Enum):
     PIXELS = "pixels"
-    VIT_CLS_HEADS = "vit"
+    VIT = "vit"
 
 
 def parse_args():
@@ -16,7 +16,7 @@ def parse_args():
                                                  "output results to the target dir.")
     parser.add_argument("--source", help="Path to the source directory", default='examples')
     parser.add_argument("--target", help="Path to the target directory", default='results')
-    parser.add_argument('--bg_subtraction_alg_type', default='pixels', type=str,
+    parser.add_argument('--bg_subtraction_alg_type', default='vit', type=str,
                         choices=['pixels', 'vit'], help='Optional background subtraction algorithms.')
     parser.add_argument('--patch_size_in_meters', nargs=2, default=(5, 5), type=int, help='A tuple of two integers representing patch '
                                                                           'size in meters')
@@ -26,18 +26,23 @@ def parse_args():
     parser.add_argument("--vit_image_size", default=(480, 480), type=int, nargs="+", help="Resize image.")
     parser.add_argument("--vit_threshold", type=float, default=None, help="""We visualize masks
             obtained by thresholding the self-attention maps to keep xx% of the mass.""")
+    parser.add_argument('--pretrained_weights', default='/home/shoval/Downloads/vit_mc_checkpoint300.pth', type=str,
+                        help="Path to pretrained weights to evaluate.")
+    parser.add_argument("--checkpoint_key", default="teacher", type=str, help='Key to use in the checkpoint (example: "teacher")')
     args = parser.parse_args()
     return args
 
 
 def bg_detector_alg(dota_obj, imgid, target_dir, patch_size_in_meter, vit_patch_size, vit_arch, vit_image_size,
-                    vit_threshold, alg_type: AlgorithmType=AlgorithmType.PIXELS):
+                    vit_threshold, pretrained_weights, checkpoint_key, alg_type: AlgorithmType=AlgorithmType.PIXELS):
     if alg_type == AlgorithmType.PIXELS.value:
         bg_detector_alg_pixels_ver(imgid=imgid, target_dir=target_dir, dota_obj=dota_obj,
                                    patch_size_in_meter=patch_size_in_meter)
-    elif alg_type == AlgorithmType.VIT_CLS_HEADS.value:
+    elif alg_type == AlgorithmType.VIT.value:
         bg_subtraction_with_dino_vit(imgid=imgid, target_dir=target_dir,vit_patch_size=vit_patch_size, vit_arch=vit_arch,
-                                     vit_image_size=vit_image_size, dota_obj=dota_obj, threshold=vit_threshold, patch_size_in_meter=patch_size_in_meter)
+                                     vit_image_size=vit_image_size, dota_obj=dota_obj, threshold=vit_threshold,
+                                     patch_size_in_meter=patch_size_in_meter, pretrained_weights=pretrained_weights,
+                                     checkpoint_key=checkpoint_key)
 
 
 def main():
@@ -50,12 +55,15 @@ def main():
     vit_image_size = args.vit_image_size
     vit_threshold = args.vit_threshold
     bg_subtraction_alg_type = args.bg_subtraction_alg_type
+    pretrained_weights = args.pretrained_weights
+    checkpoint_key=args.checkpoint_key
     dota_obj = DOTA(basepath=source_dir)
     imgids = dota_obj.getImgIds()
     for imgid in imgids:
         bg_detector_alg(dota_obj=dota_obj, imgid=imgid, target_dir=target_dir, patch_size_in_meter=patch_size_in_meters,
                         vit_patch_size=vit_patch_size, vit_arch=vit_arch, vit_image_size=vit_image_size,
-                        vit_threshold=vit_threshold, alg_type=bg_subtraction_alg_type)
+                        vit_threshold=vit_threshold, alg_type=bg_subtraction_alg_type, pretrained_weights=pretrained_weights,
+                        checkpoint_key=checkpoint_key)
 
 
 if __name__ == '__main__':

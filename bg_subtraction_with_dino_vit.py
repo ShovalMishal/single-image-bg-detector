@@ -20,10 +20,14 @@ class ViTMode(Enum):
     CLS_SELF_ATTENTION = "class_token_self_attention"
     LAST_BLOCK_OUTPUT = "last_block_output"
 
+class ViTModelType(Enum):
+    DINO_VIT = "dino_vit"
+    DINO_MC = "dino_mc_vit"
 
 def bg_subtraction_with_dino_vit(imgid, target_dir, vit_patch_size, vit_arch, vit_image_size, dota_obj, threshold,
-                                 patch_size_in_meter, mode=ViTMode.CLS_SELF_ATTENTION.value):
-    target_dir = os.path.join(target_dir, "vit_based_alg")
+                                 patch_size_in_meter, pretrained_weights="", checkpoint_key="",
+                                 mode=ViTMode.CLS_SELF_ATTENTION.value, model_type=ViTModelType.DINO_VIT.value):
+    target_dir = os.path.join(target_dir, model_type)
     os.makedirs(target_dir, exist_ok=True)
     anns = dota_obj.loadAnns(imgId=imgid)
     image_path = os.path.join(dota_obj.imagepath, imgid + '.png')
@@ -35,41 +39,70 @@ def bg_subtraction_with_dino_vit(imgid, target_dir, vit_patch_size, vit_arch, vi
     model.eval()
     model.to(device)
 
-    url = None
-    if vit_arch == "vit_small" and vit_patch_size == 16:
-        url = "dino_deitsmall16_pretrain/dino_deitsmall16_pretrain.pth"
-    elif vit_arch == "vit_small" and vit_patch_size == 8:
-        url = "dino_deitsmall8_300ep_pretrain/dino_deitsmall8_300ep_pretrain.pth"  # model used for visualizations in our paper
-    elif vit_arch == "vit_base" and vit_patch_size == 16:
-        url = "dino_vitbase16_pretrain/dino_vitbase16_pretrain.pth"
-    elif vit_arch == "vit_base" and vit_patch_size == 8:
-        url = "dino_vitbase8_pretrain/dino_vitbase8_pretrain.pth"
-    if url is not None:
-        print("Since no pretrained weights have been provided, we load the reference pretrained DINO weights.")
-        state_dict = torch.hub.load_state_dict_from_url(url="https://dl.fbaipublicfiles.com/dino/" + url)
-        model.load_state_dict(state_dict, strict=True)
+    if model_type==ViTModelType.DINO_VIT.value:
+        url = None
+        if vit_arch == "vit_small" and vit_patch_size == 16:
+            url = "dino_deitsmall16_pretrain/dino_deitsmall16_pretrain.pth"
+        elif vit_arch == "vit_small" and vit_patch_size == 8:
+            url = "dino_deitsmall8_300ep_pretrain/dino_deitsmall8_300ep_pretrain.pth"  # model used for visualizations in our paper
+        elif vit_arch == "vit_base" and vit_patch_size == 16:
+            url = "dino_vitbase16_pretrain/dino_vitbase16_pretrain.pth"
+        elif vit_arch == "vit_base" and vit_patch_size == 8:
+            url = "dino_vitbase8_pretrain/dino_vitbase8_pretrain.pth"
+        if url is not None:
+            print("Since no pretrained weights have been provided, we load the reference pretrained DINO weights.")
+            state_dict = torch.hub.load_state_dict_from_url(url="https://dl.fbaipublicfiles.com/dino/" + url)
+            model.load_state_dict(state_dict, strict=True)
+        else:
+            print("There is no reference weights available for this model => We use random weights.")
+
     else:
-        print("There is no reference weights available for this model => We use random weights.")
+        # dino-mc case
+        state_dict = torch.load(pretrained_weights, map_location="cpu")
+        # print(state_dict['teacher']['module.head.last_layer.weight_v'])
+        # print(state_dict.keys())
+        if checkpoint_key is not None and checkpoint_key in state_dict:
+            print(f"Take key {checkpoint_key} in provided checkpoint dict")
+            state_dict = state_dict[checkpoint_key]
+        # remove `module.` prefix
+        state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
+        # remove `backbone.` prefix induced by multicrop wrapper
+        state_dict = {k.replace("backbone.", ""): v for k, v in state_dict.items()}
+        # print(state_dict.keys())
+        # if model_name != 'vit_small':
+        #     state_dict = {k.replace("head", ""): v for k, v in state_dict.items()}
+        msg = model.load_state_dict(state_dict, strict=False)
+        print('Pretrained weights found at {} and loaded with msg: {}'.format(pretrained_weights, msg))
+
 
     if os.path.isfile(image_path):
         with open(image_path, 'rb') as f:
             img = Image.open(f)
             orig_img = img.convert('RGB')
-
-    transform = pth_transforms.Compose([
-        pth_transforms.Resize(vit_image_size),
-        pth_transforms.ToTensor(),
-        pth_transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
-    ])
+    if model_type==ViTModelType.DINO_VIT.value:
+        transform = pth_transforms.Compose([
+            pth_transforms.Resize(vit_image_size),
+            pth_transforms.ToTensor(),
+            pth_transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+        ])
+    else:
+        transform = pth_transforms.Compose([
+            pth_transforms.Resize(256, interpolation=3),
+            pth_transforms.CenterCrop(224),
+            pth_transforms.ToTensor(),
+            pth_transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+        ])
     transform_to_view_original = pth_transforms.Compose([
         pth_transforms.Resize(vit_image_size),
-        pth_transforms.ToTensor(),
+        pth_transforms.ToTensor()
     ])
     img = transform(orig_img)
     # make the image divisible by the patch size
     w, h = img.shape[1] - img.shape[1] % vit_patch_size, img.shape[2] - img.shape[2] % vit_patch_size
     img = img[:, :w, :h].unsqueeze(0)
-    orig_img = transform_to_view_original(orig_img)[:, :w, :h]
+    orig_img = transform_to_view_original(orig_img)[:, :w, :h].permute(1, 2, 0)
+    # RGB to BGR
+    orig_img = orig_img[:, :, torch.tensor([2, 1, 0])]
     w_featmap = img.shape[-2] // vit_patch_size
     h_featmap = img.shape[-1] // vit_patch_size
 
@@ -118,10 +151,9 @@ def bg_subtraction_with_dino_vit(imgid, target_dir, vit_patch_size, vit_arch, vi
                 display_instances(image, th_attn[j], fname=os.path.join(target_dir, imgid,
                                                                         "mask_th" + str(threshold) + "_head" + str(
                                                                             j) + ".png"), blur=False)
-        original_image = dota_obj.loadImgs(imgid)[0]
         gsd = dota_obj.loadGsd(imgId=imgid)
         patch_size = (ceil(patch_size_in_meter[0] / gsd), ceil(patch_size_in_meter[1] / gsd))
-        padded_image = pad_image_to_divisible(cv2.resize(original_image, vit_image_size), patch_size[0])
+        padded_image = pad_image_to_divisible(orig_img, patch_size[0])
         padded_image_size = padded_image.shape
         for j in range(nh + 1):
             curr_atten = attentions[j]
@@ -136,7 +168,7 @@ def bg_subtraction_with_dino_vit(imgid, target_dir, vit_patch_size, vit_arch, vi
             file_name = "attn_head" + str(j) if j != nh else "averaged_attention"
             plot_k_heat_maps(k_to_heat_map=k_to_heat_map, heat_map_width=patches.shape[0],
                              heat_map_height=patches.shape[1], target_dir=target_dir, imgid=imgid, anns=anns,
-                             dota_obj=dota_obj, orig_image=padded_image, file_name=file_name,
+                             dota_obj=dota_obj, orig_image=np.flipud(padded_image), file_name=file_name,
                              k_values=[2, 5, 10, 20, 50, 100, ])
 
     elif mode == ViTMode.LAST_BLOCK_OUTPUT.value:
@@ -147,8 +179,7 @@ def bg_subtraction_with_dino_vit(imgid, target_dir, vit_patch_size, vit_arch, vi
         k_to_heat_map = calculate_patches_alg_heat_maps_for_k_values(heat_map_width=w_featmap,
                                                                      heat_map_height=h_featmap,
                                                                      flattened_pathces_matrix=output)
-        # RGB to BGR
-        orig_img = orig_img[torch.tensor([2, 1, 0]), :, :]
+
         plot_k_heat_maps(k_to_heat_map=k_to_heat_map, heat_map_width=w_featmap, heat_map_height=h_featmap,
                          target_dir=target_dir, imgid=imgid, anns=anns, dota_obj=dota_obj,
-                         orig_image=np.flipud(orig_img.permute(1, 2, 0)))
+                         orig_image=np.flipud(orig_img))
