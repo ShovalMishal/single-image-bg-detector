@@ -1,7 +1,7 @@
 import argparse
 from enum import Enum
 import numpy as np
-from DOTA_devkit import DOTA
+from DOTA_devkit.DOTA import DOTA
 from bg_subtraction_accord_pixels import bg_detector_alg_pixels_ver
 from bg_subtraction_with_dino_vit import bg_subtraction_with_dino_vit
 
@@ -50,7 +50,7 @@ def main():
     vit_image_size = args.vit_image_size
     vit_threshold = args.vit_threshold
     bg_subtraction_alg_type = args.bg_subtraction_alg_type
-    dota_obj = DOTA(source_dir)
+    dota_obj = DOTA(basepath=source_dir)
     imgids = dota_obj.getImgIds()
     for imgid in imgids:
         bg_detector_alg(dota_obj=dota_obj, imgid=imgid, target_dir=target_dir, patch_size_in_meter=patch_size_in_meters,
