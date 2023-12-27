@@ -77,37 +77,45 @@ def calculate_patches_alg_heat_maps_for_k_values(heat_map_width, heat_map_height
 
 
 def plot_k_heat_maps(k_to_heat_map, heat_map_width, heat_map_height, target_dir, imgid, anns, dota_obj, orig_image,
-                     file_name="", k_values=[2, 5, 10, 20, 50, 100, ]):
+                     k_values=[2, 5, 10, 20, 50, 100, ]):
     orig_image_size = orig_image.shape
+
     for k in k_values:
+        filenames = [f'distance to {k}-th neighbour, image:{imgid}',
+                     f'{k}-th_neighbour_distance_overlaid_on_image_{imgid}']
         heatmap = k_to_heat_map[k].reshape((heat_map_width, heat_map_height)) / k_to_heat_map[k].reshape(
-            (heat_map_width, heat_map_height)).max()  # reshape and normalize
-
-        plt.clf()
-        plt.title(f'distance to {k}-th neighbour, image:{imgid}')
-        plt.imshow(heatmap)
-        plt.colorbar()
-        plt.savefig(os.path.join(target_dir, imgid, f'{file_name}_distance_to_{k}-th_closest_neighbour.png'))
-
-        plt.clf()
-        plt.title('ground truth')
-        dota_obj.showAnns(anns, imgid, 2)
-        plt.savefig(os.path.join(target_dir, imgid, f'original_image_{imgid}_with_anns.png'))
-
-        plt.clf()
-        plt.subplot(1, 2, 1)
-        plt.title(f'distance to {k}-th neighbour, image:{imgid}')
-        extent = 0, orig_image_size[0], 0, orig_image_size[0]
-        plt.imshow(orig_image)
-        plt.imshow(heatmap, alpha=.5, interpolation='bilinear',
-                   extent=extent)
-        plt.colorbar()
-        plt.subplot(1, 2, 2)
-        plt.title('ground truth')
-        dota_obj.showAnns(anns, imgid, 2)
-        fig = plt.gcf()
-        fig.set_size_inches((8, 8))
-        plt.tight_layout()
-        plt.savefig(os.path.join(target_dir, imgid, f'{k}-th_neighbour_distance_overlaid_on_image_{file_name}.png'))
+            (heat_map_width, heat_map_height)).max()
+        plot_heat_map(heatmap=heatmap,
+                      imgid=imgid, target_dir=target_dir, dota_obj=dota_obj, anns=anns, orig_image_size=orig_image_size,
+                      orig_image=orig_image, filenames=filenames)
 
 
+def plot_heat_map(heatmap, imgid, target_dir, dota_obj, anns, orig_image_size,
+                  orig_image, filenames=[]):
+
+    plt.clf()
+    plt.title(filenames[0])
+    plt.imshow(heatmap)
+    plt.colorbar()
+    plt.savefig(os.path.join(target_dir, imgid, f'{filenames[0]}.png'))
+
+    plt.clf()
+    plt.title('ground truth')
+    dota_obj.showAnns(anns, imgid, 2)
+    plt.savefig(os.path.join(target_dir, imgid, f'original_image_{imgid}_with_anns.png'))
+
+    plt.clf()
+    plt.subplot(1, 2, 1)
+    plt.title(f'{filenames[0]}')
+    extent = 0, orig_image_size[0], 0, orig_image_size[0]
+    plt.imshow(orig_image)
+    plt.imshow(heatmap, alpha=.5, interpolation='bilinear',
+               extent=extent)
+    plt.colorbar()
+    plt.subplot(1, 2, 2)
+    plt.title('ground truth')
+    dota_obj.showAnns(anns, imgid, 2)
+    fig = plt.gcf()
+    fig.set_size_inches((8, 8))
+    plt.tight_layout()
+    plt.savefig(os.path.join(target_dir, imgid, f'{filenames[1]}.png'))

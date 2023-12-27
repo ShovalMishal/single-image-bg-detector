@@ -12,7 +12,8 @@ import dino.vision_transformer as vits
 from torchvision import transforms as pth_transforms
 import skimage.io
 import cv2
-from bg_subtractor_utils import pad_image_to_divisible, calculate_patches_alg_heat_maps_for_k_values, plot_k_heat_maps
+from bg_subtractor_utils import pad_image_to_divisible, calculate_patches_alg_heat_maps_for_k_values, plot_k_heat_maps, \
+    plot_heat_map
 from dino.visualize_attention import display_instances
 
 
@@ -26,7 +27,7 @@ class ViTModelType(Enum):
 
 def bg_subtraction_with_dino_vit(imgid, target_dir, vit_patch_size, vit_arch, vit_image_size, dota_obj, threshold,
                                  patch_size_in_meter, pretrained_weights="", checkpoint_key="",
-                                 mode=ViTMode.CLS_SELF_ATTENTION.value, model_type=ViTModelType.DINO_VIT.value):
+                                 mode=ViTMode.CLS_SELF_ATTENTION.value, model_type=ViTModelType.DINO_MC.value):
     target_dir = os.path.join(target_dir, model_type)
     os.makedirs(target_dir, exist_ok=True)
     anns = dota_obj.loadAnns(imgId=imgid)
@@ -88,7 +89,7 @@ def bg_subtraction_with_dino_vit(imgid, target_dir, vit_patch_size, vit_arch, vi
     else:
         transform = pth_transforms.Compose([
             pth_transforms.Resize(256, interpolation=3),
-            pth_transforms.CenterCrop(224),
+            # pth_transforms.CenterCrop(224),
             pth_transforms.ToTensor(),
             pth_transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
         ])
@@ -143,6 +144,10 @@ def bg_subtraction_with_dino_vit(imgid, target_dir, vit_patch_size, vit_arch, vi
             if j == nh:
                 fname = os.path.join(target_dir, imgid, "average_attention.png")
             plt.imsave(fname=fname, arr=attentions[j], format='png')
+            plot_heat_map(heatmap=attentions[j],
+                          imgid=imgid, target_dir=target_dir, dota_obj=dota_obj, anns=anns,
+                          orig_image_size=orig_img.shape, orig_image=np.flipud(orig_img),
+                          filenames=[f"attention_map_head_{j}", f"attention_map_head_{j}_overlaid_on_image_{imgid}"])
             print(f"{fname} saved.")
 
         if threshold is not None:
@@ -151,25 +156,7 @@ def bg_subtraction_with_dino_vit(imgid, target_dir, vit_patch_size, vit_arch, vi
                 display_instances(image, th_attn[j], fname=os.path.join(target_dir, imgid,
                                                                         "mask_th" + str(threshold) + "_head" + str(
                                                                             j) + ".png"), blur=False)
-        gsd = dota_obj.loadGsd(imgId=imgid)
-        patch_size = (ceil(patch_size_in_meter[0] / gsd), ceil(patch_size_in_meter[1] / gsd))
-        padded_image = pad_image_to_divisible(orig_img, patch_size[0])
-        padded_image_size = padded_image.shape
-        for j in range(nh + 1):
-            curr_atten = attentions[j]
-            padded_atten = pad_image_to_divisible(curr_atten, patch_size[0])
-            print(f"Image id is: {imgid},\n image size is: {padded_image_size},\n "
-                  f"patch size is: {patch_size_in_meter} meters and {patch_size} pixels.")
-            patches = view_as_windows(padded_atten, patch_size, step=patch_size[0])
-            patches_flattened = patches.reshape(patches.shape[0] * patches.shape[1], -1).astype(np.float32) / 255.0
-            k_to_heat_map = calculate_patches_alg_heat_maps_for_k_values(heat_map_width=patches.shape[0],
-                                                                         heat_map_height=patches.shape[1],
-                                                                         flattened_pathces_matrix=patches_flattened)
-            file_name = "attn_head" + str(j) if j != nh else "averaged_attention"
-            plot_k_heat_maps(k_to_heat_map=k_to_heat_map, heat_map_width=patches.shape[0],
-                             heat_map_height=patches.shape[1], target_dir=target_dir, imgid=imgid, anns=anns,
-                             dota_obj=dota_obj, orig_image=np.flipud(padded_image), file_name=file_name,
-                             k_values=[2, 5, 10, 20, 50, 100, ])
+
 
     elif mode == ViTMode.LAST_BLOCK_OUTPUT.value:
         target_dir = os.path.join(target_dir, ViTMode.LAST_BLOCK_OUTPUT.value)
