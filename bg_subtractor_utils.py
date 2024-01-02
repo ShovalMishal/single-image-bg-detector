@@ -1,8 +1,21 @@
 import os
-
+from enum import Enum
 import numpy as np
 from scipy.spatial import cKDTree
-import matplotlib.pyplot as plt
+from matplotlib import pyplot as plt
+from sklearn import metrics
+from sklearn.metrics import RocCurveDisplay, PrecisionRecallDisplay, average_precision_score
+
+
+class ViTMode(Enum):
+    CLS_SELF_ATTENTION = "class_token_self_attention"
+    LAST_BLOCK_OUTPUT = "last_block_output"
+
+
+class ViTModelType(Enum):
+    DINO_VIT = "dino_vit"
+    DINO_MC = "dino_mc_vit"
+
 
 def pad_image_to_divisible(image, P):
     H = image.shape[0]
@@ -92,7 +105,6 @@ def plot_k_heat_maps(k_to_heat_map, heat_map_width, heat_map_height, target_dir,
 
 def plot_heat_map(heatmap, imgid, target_dir, dota_obj, anns, orig_image_size,
                   orig_image, filenames=[]):
-
     plt.clf()
     plt.title(filenames[0])
     plt.imshow(heatmap)
@@ -119,3 +131,65 @@ def plot_heat_map(heatmap, imgid, target_dir, dota_obj, anns, orig_image_size,
     fig.set_size_inches((8, 8))
     plt.tight_layout()
     plt.savefig(os.path.join(target_dir, imgid, f'{filenames[1]}.png'))
+
+
+def normalize_array(array):
+    min_val = np.min(array)
+    max_val = np.max(array)
+    normalized_array = (array - min_val) / (max_val - min_val)
+    return normalized_array
+
+def create_gt_attention(anns, image_size, scale_factor=1):
+    gt_attention = np.zeros(image_size)
+    for ann in anns:
+        transposed_tuples = list(zip(*ann["poly"]))
+        min_values = [max(0, int(min(values) * scale_factor)) for values in transposed_tuples]
+        max_values = [min(int(max(values) * scale_factor), image_size[0]) for values in transposed_tuples]
+        gt_attention[min_values[1]:max_values[1], min_values[0]:max_values[0]] = np.ones(
+            (max_values[1] - min_values[1], max_values[0] - min_values[0]))
+    return gt_attention
+
+def plot_precision_recall_curve(gt, heatmap, title="", result_path: str = ""):
+    heatmap = normalize_array(heatmap).flatten()
+    gt = gt.flatten()
+    # plot precision recall curve
+    # print(f"Calculating precision recall curve {title}...")
+    precision, recall, _ = metrics.precision_recall_curve(gt.tolist(), heatmap.tolist())
+    ap = average_precision_score(gt, heatmap)
+    # print("AP val is " + str(ap))
+    if result_path:
+        display = PrecisionRecallDisplay.from_predictions(gt.tolist(),
+                                                          heatmap.tolist(),
+                                                          name=f"ood vs id",
+                                                          color="darkorange"
+                                                          )
+        _ = display.ax_.set_title(title)
+        plt.savefig(result_path + f"/{title}.png")
+    return ap
+
+
+def plot_roc_curve(gt, heatmap, title="", result_path: str = ""):
+    heatmap = normalize_array(heatmap).flatten()
+    gt = gt.flatten()
+    # plot roc curve
+    # print(f"Calculating AuC for {title}...")
+    fpr, tpr, thresholds = metrics.roc_curve(gt.tolist(), heatmap.tolist())
+    auc = metrics.auc(fpr, tpr)
+    # print("auc val is " + str(auc))
+
+    if result_path:
+        RocCurveDisplay.from_predictions(
+            gt.tolist(),
+            heatmap.tolist(),
+            name=f"ood vs id",
+            color="darkorange",
+        )
+
+        plt.plot([0, 1], [0, 1], "k--", label="chance level (AUC = 0.5)")
+        plt.axis("square")
+        plt.xlabel("False Positive Rate")
+        plt.ylabel("True Positive Rate")
+        plt.title(title)
+        plt.tight_layout()
+        plt.savefig(result_path + f"/{title}.png")
+    return auc
