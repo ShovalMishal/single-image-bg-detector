@@ -1,10 +1,21 @@
+import math
 import os
 from enum import Enum
+from matplotlib.patches import Polygon
+from matplotlib.collections import PatchCollection
+import cv2
 import numpy as np
+import torch
 from scipy.spatial import cKDTree
 from matplotlib import pyplot as plt
 from sklearn import metrics
-from sklearn.metrics import RocCurveDisplay, PrecisionRecallDisplay, average_precision_score
+from sklearn.metrics import RocCurveDisplay, PrecisionRecallDisplay, average_precision_score, roc_auc_score
+from torchvision import transforms as pth_transforms
+from PIL import Image
+from mmdet.structures.bbox import HorizontalBoxes
+from mmengine.structures import InstanceData
+from mmdet.models.utils import unpack_gt_instances
+import torch.nn.functional as F
 
 
 class ViTMode(Enum):
@@ -139,6 +150,7 @@ def normalize_array(array):
     normalized_array = (array - min_val) / (max_val - min_val)
     return normalized_array
 
+
 def create_gt_attention(anns, image_size, scale_factor=1):
     gt_attention = np.zeros(image_size)
     for ann in anns:
@@ -148,6 +160,7 @@ def create_gt_attention(anns, image_size, scale_factor=1):
         gt_attention[min_values[1]:max_values[1], min_values[0]:max_values[0]] = np.ones(
             (max_values[1] - min_values[1], max_values[0] - min_values[0]))
     return gt_attention
+
 
 def plot_precision_recall_curve(gt, heatmap, title="", result_path: str = ""):
     heatmap = normalize_array(heatmap).flatten()
@@ -193,3 +206,197 @@ def plot_roc_curve(gt, heatmap, title="", result_path: str = ""):
         plt.tight_layout()
         plt.savefig(result_path + f"/{title}.png")
     return auc
+
+
+def conv_heatmap(patch_size, heatmap):
+    window = torch.ones(patch_size)
+    heatmap_shape = heatmap.shape
+    result = F.conv2d(torch.tensor(heatmap).view(1, 1, heatmap_shape[0], heatmap_shape[1]),
+                            window.view(1, 1, patch_size[0], patch_size[1]),
+                            padding='same')
+    result = result[0][0].numpy()
+    return result
+
+
+def extract_patches_accord_heatmap(heatmap: np.ndarray, patch_size: tuple, img_id: str, threshold_percentage=95,
+                                   padding=True, plot=False, title="") -> np.ndarray:
+    score_heatmap = conv_heatmap(patch_size=patch_size, heatmap=heatmap)
+    threshold_value = np.percentile(heatmap, threshold_percentage)
+    heatmap_copy = np.copy(heatmap)
+    curr_max_val = np.max(heatmap_copy)
+    argmax_index = np.argmax(heatmap_copy)
+    max_index_matrix = np.unravel_index(argmax_index, heatmap_copy.shape)
+    patches_list = []
+    patches_scores = []
+    heatmap_size = heatmap.shape
+    mask = np.zeros(heatmap_size)
+    while curr_max_val > threshold_value:
+        curr_patch_top_left_w, curr_patch_top_left_h = max(max_index_matrix[1] - patch_size[1] // 2, 0), max(
+            max_index_matrix[0] - patch_size[0] // 2, 0)
+        curr_patch_bottom_right_w, curr_patch_bottom_right_h = min(max_index_matrix[1] + patch_size[1] // 2 + 1,
+                                                                   heatmap_size[1]), min(
+            max_index_matrix[0] + patch_size[0] // 2 + 1, heatmap_size[0])
+        curr_bbox = (curr_patch_top_left_w, curr_patch_top_left_h, curr_patch_bottom_right_w, curr_patch_bottom_right_h)
+        patches_list.append(curr_bbox)
+        curr_score = score_heatmap[max_index_matrix[0], max_index_matrix[1]]
+        patches_scores.append(curr_score)
+
+        curr_patch_size = curr_patch_bottom_right_h - curr_patch_top_left_h, curr_patch_bottom_right_w - curr_patch_top_left_w
+        if padding:
+            curr_buffered_patch_top_left_w, curr_buffered_patch_top_left_h = max(max_index_matrix[1] - patch_size[1],
+                                                                                 0), max(
+                max_index_matrix[0] - patch_size[0], 0)
+            curr_buffered_patch_bottom_right_w, curr_buffered_patch_bottom_right_h = min(
+                max_index_matrix[1] + patch_size[1] + 1,
+                heatmap_size[1]), min(max_index_matrix[0] + patch_size[0] + 1, heatmap_size[0])
+            curr_buffered_patch_size = (curr_buffered_patch_bottom_right_h - curr_buffered_patch_top_left_h,
+                                        curr_buffered_patch_bottom_right_w - curr_buffered_patch_top_left_w)
+            heatmap_copy[curr_buffered_patch_top_left_h:curr_buffered_patch_bottom_right_h,
+            curr_buffered_patch_top_left_w:curr_buffered_patch_bottom_right_w] = np.zeros(
+                (curr_buffered_patch_size[0], curr_buffered_patch_size[1]))
+        else:
+            heatmap_copy[curr_patch_top_left_h:curr_patch_bottom_right_h,
+        curr_patch_top_left_w:curr_patch_bottom_right_w] = np.zeros((curr_patch_size[0], curr_patch_size[1]))
+
+        mask[curr_patch_top_left_h:curr_patch_bottom_right_h,
+        curr_patch_top_left_w:curr_patch_bottom_right_w] = np.ones((curr_patch_size[0], curr_patch_size[1]))
+
+        curr_max_val = np.max(heatmap_copy)
+        argmax_index = np.argmax(heatmap_copy)
+        max_index_matrix = np.unravel_index(argmax_index, heatmap_copy.shape)
+    patches_tensor = torch.tensor(patches_list)
+    if plot:
+        fig, ax = plt.subplots()
+        plt.imshow(heatmap)
+        plt.colorbar()
+        show_predicted_boxes(patches_tensor, ax)
+
+        plt.savefig(
+            f"/home/shoval/Documents/Repositories/single-image-bg-detector/results/normalized_gsd/dino_vit/class_token_self_attention/examples/90_with_paddding_avg_acore/{img_id}_heatmap_with_{title}_predicted_boxes.png")
+    return patches_tensor, mask, patches_scores
+
+
+def mask_img(imgid, dota_obj, mask):
+    image_path = os.path.join(dota_obj.imagepath, imgid + '.png')
+    if os.path.isfile(image_path):
+        with open(image_path, 'rb') as f:
+            img = Image.open(f)
+            img = img.convert('RGB')
+    transform_to_view_original = pth_transforms.Compose([
+        pth_transforms.Resize(mask.shape),
+        pth_transforms.ToTensor()
+    ])
+    img = transform_to_view_original(img).permute(1, 2, 0)
+    masked_img = img * mask[:, :, None]
+    # plt.imshow(img)
+    plt.show()
+    plt.clf()
+    plt.imshow(masked_img)
+    plt.show()
+
+
+def assign_predicted_boxes_to_gt(bbox_assigner, predicted_boxes, data_batch, all_labels, img_id, dota_obj, heatmap,
+                                 patch_size, plot=False, title=""):
+    # TODO: refer the case in which patch size has odd sizes
+    patch_diag = np.sqrt(np.square(patch_size[0]) + np.square(patch_size[1]))
+    formatted_predicted_patches = HorizontalBoxes(predicted_boxes)
+    formatted_predicted_patches = InstanceData(priors=formatted_predicted_patches)
+
+    gt_instances = unpack_gt_instances(data_batch['data_samples'])
+    batch_gt_instances, batch_gt_instances_ignore, _ = gt_instances
+    diags = torch.sqrt(
+        torch.square(batch_gt_instances[0].bboxes.widths) + torch.square(batch_gt_instances[0].bboxes.heights))
+    filtered_instances_indices = np.where((diags<(patch_diag*1.2)) & (diags>(patch_diag/1.2)))[0]
+    filtered_instances = batch_gt_instances[0][filtered_instances_indices]
+
+    assign_result = bbox_assigner.assign(
+        formatted_predicted_patches, filtered_instances,
+        batch_gt_instances_ignore[0])
+
+    gt_labels = filtered_instances.labels
+    dt_labels = assign_result.labels
+    dt_match = assign_result.gt_inds
+    found_gt_indices = dt_match[torch.nonzero(dt_match > 0)] - 1
+
+    if plot:
+        fig, ax = plt.subplots()
+        original_img = cv2.imread(os.path.join(dota_obj.imagepath, img_id + '.png'))
+        plt.title(f'{img_id}')
+        extent = 0, heatmap.shape[0], 0, heatmap.shape[0]
+        plt.imshow(np.flipud(original_img), extent=extent)
+        plt.imshow(heatmap, alpha=.5)
+        show_predicted_boxes(predicted_boxes=predicted_boxes, ax=ax, gt_boxes=filtered_instances['bboxes'].tensor,
+                             found_gt_indices=found_gt_indices)
+        plt.colorbar()
+        plt.savefig(
+            f"/home/shoval/Documents/Repositories/single-image-bg-detector/results/normalized_gsd/dino_vit/class_token_self_attention/examples/90_with_paddding_avg_acore/{img_id}_gt_with_heatmap_and_{title}_predicted_boxes.png")
+
+    return gt_labels, filtered_instances_indices, dt_labels, dt_match
+
+def assign_predicted_boxes_to_gt_accord_intersection(bbox_assigner, predicted_boxes, data_batch, all_labels, img_id, dota_obj, heatmap,
+                                 patch_size, plot=False, title=""):
+    # TODO: refer the case in which patch size has odd sizes
+    patch_diag = np.sqrt(np.square(patch_size[0]) + np.square(patch_size[1]))
+    formatted_predicted_patches = HorizontalBoxes(predicted_boxes)
+    formatted_predicted_patches = InstanceData(priors=formatted_predicted_patches)
+
+    gt_instances = unpack_gt_instances(data_batch['data_samples'])
+    batch_gt_instances, batch_gt_instances_ignore, _ = gt_instances
+    diags = torch.sqrt(
+        torch.square(batch_gt_instances[0].bboxes.widths) + torch.square(batch_gt_instances[0].bboxes.heights))
+    filtered_instances_indices = np.where((diags<(patch_diag*1.2)) & (diags>(patch_diag/1.2)))[0]
+    filtered_instances = batch_gt_instances[0][filtered_instances_indices]
+    overlaps = bbox_assigner.iou_calculator(filtered_instances.bboxes, formatted_predicted_patches.priors)
+    tp = torch.sum(torch.max(overlaps, axis=1).values>0)
+    found_gt_indices = torch.nonzero(torch.max(overlaps, axis=1).values>0)
+
+    if plot:
+        fig, ax = plt.subplots()
+        original_img = cv2.imread(os.path.join(dota_obj.imagepath, img_id + '.png'))
+        plt.title(f'{img_id}')
+        extent = 0, heatmap.shape[0], 0, heatmap.shape[0]
+        plt.imshow(np.flipud(original_img), extent=extent)
+        plt.imshow(heatmap, alpha=.5)
+        show_predicted_boxes(predicted_boxes=predicted_boxes, ax=ax, gt_boxes=filtered_instances['bboxes'].tensor,
+                             found_gt_indices=found_gt_indices)
+        plt.colorbar()
+        plt.savefig(
+            f"/home/shoval/Documents/Repositories/single-image-bg-detector/results/normalized_gsd/dino_vit/class_token_self_attention/examples/90_with_paddding_avg_acore/{img_id}_gt_with_heatmap_and_{title}_predicted_boxes.png")
+    gt = len(np.unique(filtered_instances_indices))
+    fp = len(formatted_predicted_patches)- tp
+    print(f"Discovered {tp} bbox out of {gt} for img {img_id}\n")
+    return tp, gt, fp
+
+
+
+def show_predicted_boxes(predicted_boxes, ax, found_gt_indices=None, gt_boxes=None):
+    predicted_boxes_xy_format = [[(box[0].item(), box[1].item()), (box[2].item(), box[1].item()),
+                                  (box[2].item(), box[3].item()), (box[0].item(), box[3].item())] for box in
+                                 predicted_boxes]
+    polygons = []
+    color = []
+    for box in predicted_boxes_xy_format:
+        c = (np.random.random((1, 3)) * 0.6 + 0.4).tolist()[0]
+        color.append(c)
+        polygons.append(Polygon(box))
+    p = PatchCollection(polygons, facecolors='none', edgecolors=color, linewidths=2)
+    ax.add_collection(p)
+    if gt_boxes is not None:
+        gt_boxes_xy_format = [[(box[0].item(), box[1].item()), (box[2].item(), box[1].item()),
+                               (box[2].item(), box[3].item()), (box[0].item(), box[3].item())] for box in
+                              gt_boxes]
+        polygons = []
+        color = []
+        for box_ind, box in enumerate(gt_boxes_xy_format):
+            c = 'r' if box_ind not in found_gt_indices else 'g'
+            color.append(c)
+            polygons.append(Polygon(box))
+        p = PatchCollection(polygons, facecolors='none', edgecolors=color, linewidths=2)
+        ax.add_collection(p)
+
+def calculate_performance_measures(gt, scores):
+    gt[gt>=0] = 1
+    gt[gt<0] = 0
+    ap = average_precision_score(gt, scores)
+    auc = roc_auc_score(gt, scores)
+    return ap, auc

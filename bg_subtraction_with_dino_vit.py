@@ -79,7 +79,42 @@ class BGSubtractionWithDinoVit:
             msg = self.model.load_state_dict(state_dict, strict=False)
             print('Pretrained weights found at {} and loaded with msg: {}'.format(pretrained_weights, msg))
 
+    def run_on_image_tensor(self, img:torch.tensor):
+        # make the image divisible by the patch size
+        w, h = img.shape[1] - img.shape[1] % self.vit_patch_size, img.shape[2] - img.shape[2] % self.vit_patch_size
+        img = img[:, :w, :h].unsqueeze(0)
+        w_featmap = img.shape[-2] // self.vit_patch_size
+        h_featmap = img.shape[-1] // self.vit_patch_size
+        if self.model_mode == ViTMode.CLS_SELF_ATTENTION.value:
+            attentions = self.model.get_last_selfattention(img.to(device))
+            nh = attentions.shape[1]  # number of head
 
+            # we keep only the output patch attention
+            attentions = attentions[0, :, 0, 1:].reshape(nh, -1)
+            attentions = attentions.reshape(nh, w_featmap, h_featmap)
+            attentions = \
+                nn.functional.interpolate(attentions.unsqueeze(0), scale_factor=self.vit_patch_size, mode="bilinear")[
+                    0].cpu().numpy()
+
+            # add average attention
+            attentions = np.concatenate((attentions, np.mean(attentions, axis=0)[None, :]), axis=0)
+            return attentions[-1]
+        elif self.model_mode == ViTMode.LAST_BLOCK_OUTPUT.value:
+            output = self.model.get_last_block(img.to(device))[1:, :].cpu()
+            k_to_heat_map = calculate_patches_alg_heat_maps_for_k_values(heat_map_width=w_featmap,
+                                                                         heat_map_height=h_featmap,
+                                                                         flattened_pathces_matrix=output)
+
+
+            returned_heat_map = k_to_heat_map[20].reshape((w_featmap, h_featmap)) / k_to_heat_map[20].reshape(
+                (w_featmap, h_featmap)).max()
+            returned_heat_map = \
+                nn.functional.interpolate(torch.tensor(returned_heat_map).unsqueeze(dim=0).unsqueeze(dim=0),
+                                          scale_factor=self.vit_patch_size,
+                                          mode="nearest")[0][0]
+
+
+            return returned_heat_map.numpy()
 
     def run_on_image_path(self, imgid, plot_result=False):
         anns = self.dota_obj.loadAnns(imgId=imgid)
