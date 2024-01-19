@@ -217,6 +217,15 @@ def conv_heatmap(patch_size, heatmap):
     result = result[0][0].numpy()
     return result
 
+def calculate_box_by_size_and_centers_in_xyxy_format(patch_size, center, max_size):
+    curr_patch_top_left_w, curr_patch_top_left_h = max(center[1] - patch_size[1] // 2, 0), max(
+        center[0] - patch_size[0] // 2, 0)
+    curr_patch_bottom_right_w, curr_patch_bottom_right_h = min(center[1] + patch_size[1] // 2 + 1,
+                                                               max_size[1]), min(
+        center[0] + patch_size[0] // 2 + 1, max_size[0])
+    curr_bbox = (curr_patch_top_left_w, curr_patch_top_left_h, curr_patch_bottom_right_w, curr_patch_bottom_right_h)
+    return curr_bbox
+
 
 def extract_patches_accord_heatmap(heatmap: np.ndarray, patch_size: tuple, img_id: str, threshold_percentage=95,
                                    padding=True, plot=False, title="") -> np.ndarray:
@@ -231,17 +240,12 @@ def extract_patches_accord_heatmap(heatmap: np.ndarray, patch_size: tuple, img_i
     heatmap_size = heatmap.shape
     mask = np.zeros(heatmap_size)
     while curr_max_val > threshold_value:
-        curr_patch_top_left_w, curr_patch_top_left_h = max(max_index_matrix[1] - patch_size[1] // 2, 0), max(
-            max_index_matrix[0] - patch_size[0] // 2, 0)
-        curr_patch_bottom_right_w, curr_patch_bottom_right_h = min(max_index_matrix[1] + patch_size[1] // 2 + 1,
-                                                                   heatmap_size[1]), min(
-            max_index_matrix[0] + patch_size[0] // 2 + 1, heatmap_size[0])
-        curr_bbox = (curr_patch_top_left_w, curr_patch_top_left_h, curr_patch_bottom_right_w, curr_patch_bottom_right_h)
+        curr_bbox = calculate_box_by_size_and_centers_in_xyxy_format(patch_size, max_index_matrix, heatmap_size)
         patches_list.append(curr_bbox)
         curr_score = score_heatmap[max_index_matrix[0], max_index_matrix[1]]
         patches_scores.append(curr_score)
 
-        curr_patch_size = curr_patch_bottom_right_h - curr_patch_top_left_h, curr_patch_bottom_right_w - curr_patch_top_left_w
+        curr_patch_size = curr_bbox[3] - curr_bbox[1], curr_bbox[2] - curr_bbox[0]
         if padding:
             curr_buffered_patch_top_left_w, curr_buffered_patch_top_left_h = max(max_index_matrix[1] - patch_size[1],
                                                                                  0), max(
@@ -255,11 +259,11 @@ def extract_patches_accord_heatmap(heatmap: np.ndarray, patch_size: tuple, img_i
             curr_buffered_patch_top_left_w:curr_buffered_patch_bottom_right_w] = np.zeros(
                 (curr_buffered_patch_size[0], curr_buffered_patch_size[1]))
         else:
-            heatmap_copy[curr_patch_top_left_h:curr_patch_bottom_right_h,
-        curr_patch_top_left_w:curr_patch_bottom_right_w] = np.zeros((curr_patch_size[0], curr_patch_size[1]))
+            heatmap_copy[curr_bbox[1]:curr_bbox[3],
+        curr_bbox[0]:curr_bbox[2]] = np.zeros((curr_patch_size[0], curr_patch_size[1]))
 
-        mask[curr_patch_top_left_h:curr_patch_bottom_right_h,
-        curr_patch_top_left_w:curr_patch_bottom_right_w] = np.ones((curr_patch_size[0], curr_patch_size[1]))
+        mask[curr_bbox[1]:curr_bbox[3],
+        curr_bbox[0]:curr_bbox[2]] = np.ones((curr_patch_size[0], curr_patch_size[1]))
 
         curr_max_val = np.max(heatmap_copy)
         argmax_index = np.argmax(heatmap_copy)
@@ -334,7 +338,7 @@ def assign_predicted_boxes_to_gt(bbox_assigner, predicted_boxes, data_batch, all
     return gt_labels, filtered_instances_indices, dt_labels, dt_match
 
 def assign_predicted_boxes_to_gt_accord_intersection(bbox_assigner, predicted_boxes, data_batch, all_labels, img_id, dota_obj, heatmap,
-                                 patch_size, plot=False, title=""):
+                                 patch_size, additional_patches_sizes=((11,21), (21,11)), plot=False, title=""):
     # TODO: refer the case in which patch size has odd sizes
     patch_diag = np.sqrt(np.square(patch_size[0]) + np.square(patch_size[1]))
     formatted_predicted_patches = HorizontalBoxes(predicted_boxes)
@@ -347,9 +351,20 @@ def assign_predicted_boxes_to_gt_accord_intersection(bbox_assigner, predicted_bo
     filtered_instances_indices = np.where((diags<(patch_diag*1.2)) & (diags>(patch_diag/1.2)))[0]
     filtered_instances = batch_gt_instances[0][filtered_instances_indices]
     overlaps = bbox_assigner.iou_calculator(filtered_instances.bboxes, formatted_predicted_patches.priors)
-    tp = torch.sum(torch.max(overlaps, axis=1).values>0)
+    tp = torch.sum(torch.max(overlaps, axis=1).values>0).item()
     found_gt_indices = torch.nonzero(torch.max(overlaps, axis=1).values>0)
 
+    # If there is intersection taking square and rectangle boxes
+    intersected_predicted_bboxes_indices = torch.max(overlaps, axis=1).indices
+    intersected_predicted_bboxes_centers = formatted_predicted_patches[intersected_predicted_bboxes_indices].priors.centers
+    additional_hypothesis = []
+    for additional_patch_size in additional_patches_sizes:
+        for center in intersected_predicted_bboxes_centers:
+            center = center.int().tolist()
+            curr_bbox=calculate_box_by_size_and_centers_in_xyxy_format(patch_size=additional_patch_size, center=(center[1],center[0]), max_size=heatmap.shape)
+            additional_hypothesis.append(curr_bbox)
+    additional_hypothesis_tensor = torch.tensor(additional_hypothesis)
+    predicted_boxes = torch.cat((predicted_boxes,additional_hypothesis_tensor))
     if plot:
         fig, ax = plt.subplots()
         original_img = cv2.imread(os.path.join(dota_obj.imagepath, img_id + '.png'))
@@ -363,7 +378,7 @@ def assign_predicted_boxes_to_gt_accord_intersection(bbox_assigner, predicted_bo
         plt.savefig(
             f"/home/shoval/Documents/Repositories/single-image-bg-detector/results/normalized_gsd/dino_vit/class_token_self_attention/examples/90_with_paddding_avg_acore/{img_id}_gt_with_heatmap_and_{title}_predicted_boxes.png")
     gt = len(np.unique(filtered_instances_indices))
-    fp = len(formatted_predicted_patches)- tp
+    fp = len(formatted_predicted_patches) - tp
     print(f"Discovered {tp} bbox out of {gt} for img {img_id}\n")
     return tp, gt, fp
 

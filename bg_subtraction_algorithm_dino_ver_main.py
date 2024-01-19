@@ -177,6 +177,7 @@ def calculate_boxes_based_performance_measures(source_dir, target_dir, vit_patch
         json.dump(performance_dict, json_file, indent=4)
     print(f"For examples images: auc is {auc} and ap is {ap}!")
 
+
 def find_best_filtering_boxes_threshold(source_dir, target_dir, vit_patch_size, vit_image_size, vit_arch,
                                                vit_threshold, pretrained_weights, checkpoint_key, vit_model_mode,
                                                vit_model_type, config, proposals_sizes):
@@ -218,12 +219,12 @@ def find_best_filtering_boxes_threshold(source_dir, target_dir, vit_patch_size, 
                 num_of_gt += gt
                 num_of_tp += tp
                 num_of_fp += fp
-        curr_peformance = {}
-        curr_peformance['precision'] = num_of_tp / (num_of_tp + num_of_fp)
-        curr_peformance['recall'] = num_of_tp / num_of_gt
+        curr_performance = {}
+        curr_performance['precision'] = num_of_tp / (num_of_tp + num_of_fp)
+        curr_performance['recall'] = num_of_tp / num_of_gt
         print(
-            f"For threshold {threshold}: precision is {curr_peformance['precision']} and recall is {curr_peformance['recall']}\n")
-        performance[threshold] = curr_peformance
+            f"For threshold {threshold}: precision is {curr_performance['precision']} and recall is {curr_performance['recall']}\n")
+        performance[threshold] = curr_performance
     with open(os.path.join(dino_vit_bg_subtractor.target_dir, "results.json"), 'w') as json_file:
         json.dump(performance, json_file, indent=4)
 
