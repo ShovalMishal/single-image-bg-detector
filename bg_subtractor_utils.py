@@ -299,9 +299,8 @@ def mask_img(imgid, dota_obj, mask):
     plt.show()
 
 
-def assign_predicted_boxes_to_gt(bbox_assigner, predicted_boxes, data_batch, all_labels, img_id, dota_obj, heatmap,
-                                 patch_size, plot=False, title=""):
-    # TODO: refer the case in which patch size has odd sizes
+def assign_predicted_boxes_to_gt(bbox_assigner, predicted_boxes, data_batch, patch_size, img_id, dota_obj, heatmap,
+                                 plot=False, title=""):
     patch_diag = np.sqrt(np.square(patch_size[0]) + np.square(patch_size[1]))
     formatted_predicted_patches = HorizontalBoxes(predicted_boxes)
     formatted_predicted_patches = InstanceData(priors=formatted_predicted_patches)
@@ -310,15 +309,12 @@ def assign_predicted_boxes_to_gt(bbox_assigner, predicted_boxes, data_batch, all
     batch_gt_instances, batch_gt_instances_ignore, _ = gt_instances
     diags = torch.sqrt(
         torch.square(batch_gt_instances[0].bboxes.widths) + torch.square(batch_gt_instances[0].bboxes.heights))
-    filtered_instances_indices = np.where((diags<(patch_diag*1.2)) & (diags>(patch_diag/1.2)))[0]
+    filtered_instances_indices = np.where((diags < (patch_diag * 1.2)) & (diags > (patch_diag / 1.2)))[0]
     filtered_instances = batch_gt_instances[0][filtered_instances_indices]
 
     assign_result = bbox_assigner.assign(
         formatted_predicted_patches, filtered_instances,
         batch_gt_instances_ignore[0])
-
-    gt_labels = filtered_instances.labels
-    dt_labels = assign_result.labels
     dt_match = assign_result.gt_inds
     found_gt_indices = dt_match[torch.nonzero(dt_match > 0)] - 1
 
@@ -334,11 +330,30 @@ def assign_predicted_boxes_to_gt(bbox_assigner, predicted_boxes, data_batch, all
         plt.colorbar()
         plt.savefig(
             f"/home/shoval/Documents/Repositories/single-image-bg-detector/results/normalized_gsd/dino_vit/class_token_self_attention/examples/90_with_paddding_avg_acore/{img_id}_gt_with_heatmap_and_{title}_predicted_boxes.png")
+    return assign_result, filtered_instances_indices
 
-    return gt_labels, filtered_instances_indices, dt_labels, dt_match
+def assign_predicted_boxes_to_gt_boxes_using_hypothesis(bbox_assigner, predicted_boxes, data_batch, patch_size, img_id,
+                                                        dota_obj, heatmap, plot=False, title=""):
+    predicted_boxes, _, _ = assign_predicted_boxes_to_gt_accord_intersection(bbox_assigner, predicted_boxes, data_batch, img_id, dota_obj, heatmap,
+                                                                          patch_size, additional_patches_sizes=((11,21), (21,11)), plot=plot, title=title)
+    assign_result, filtered_instances_indices = assign_predicted_boxes_to_gt(bbox_assigner, predicted_boxes, data_batch,
+                                                                             patch_size, img_id, dota_obj, heatmap,
+                                                                             plot, title)
+    # collect predicted_boxes labels and cut it out the images and save it in an appropriate folders
+    x=1
 
-def assign_predicted_boxes_to_gt_accord_intersection(bbox_assigner, predicted_boxes, data_batch, all_labels, img_id, dota_obj, heatmap,
-                                 patch_size, additional_patches_sizes=((11,21), (21,11)), plot=False, title=""):
+
+def assign_predicted_boxes_to_gt_and_calc_performance(bbox_assigner, predicted_boxes, data_batch, img_id, dota_obj, heatmap,
+                                                      patch_size, plot=False, title=""):
+    # TODO: refer the case in which patch size has odd sizes
+    assign_result, filtered_instances_indices = assign_predicted_boxes_to_gt(bbox_assigner, predicted_boxes, data_batch, patch_size, img_id, dota_obj, heatmap,
+                                 plot=plot, title=title)
+    dt_labels = assign_result.labels
+    dt_match = assign_result.gt_inds
+    return filtered_instances_indices, dt_labels, dt_match
+
+def assign_predicted_boxes_to_gt_accord_intersection(bbox_assigner, predicted_boxes, data_batch, img_id, dota_obj, heatmap,
+                                                                          patch_size, additional_patches_sizes=((11,21), (21,11)), plot=False, title=""):
     # TODO: refer the case in which patch size has odd sizes
     patch_diag = np.sqrt(np.square(patch_size[0]) + np.square(patch_size[1]))
     formatted_predicted_patches = HorizontalBoxes(predicted_boxes)
@@ -377,8 +392,17 @@ def assign_predicted_boxes_to_gt_accord_intersection(bbox_assigner, predicted_bo
         plt.colorbar()
         plt.savefig(
             f"/home/shoval/Documents/Repositories/single-image-bg-detector/results/normalized_gsd/dino_vit/class_token_self_attention/examples/90_with_paddding_avg_acore/{img_id}_gt_with_heatmap_and_{title}_predicted_boxes.png")
+    return predicted_boxes, filtered_instances_indices,tp
+
+
+
+def assign_predicted_boxes_to_gt_accord_intersection_and_calc_performance(bbox_assigner, predicted_boxes, data_batch, all_labels, img_id, dota_obj, heatmap,
+                                                                          patch_size, additional_patches_sizes=((11,21), (21,11)), plot=False, title=""):
+    predicted_boxes, filtered_instances_indices, tp = assign_predicted_boxes_to_gt_accord_intersection(bbox_assigner, predicted_boxes, data_batch, all_labels, img_id, dota_obj, heatmap,
+                                                                          patch_size, additional_patches_sizes, plot, title)
+
     gt = len(np.unique(filtered_instances_indices))
-    fp = len(formatted_predicted_patches) - tp
+    fp = len(predicted_boxes) - tp
     print(f"Discovered {tp} bbox out of {gt} for img {img_id}\n")
     return tp, gt, fp
 
