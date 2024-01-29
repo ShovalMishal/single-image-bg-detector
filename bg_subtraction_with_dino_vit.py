@@ -6,13 +6,13 @@ from PIL import Image
 import numpy as np
 from torch import nn
 import matplotlib.pyplot as plt
-import dino.vision_transformer as vits
+import single_image_bg_detector.dino.vision_transformer as vits
 from torchvision import transforms as pth_transforms
 import skimage.io
 import cv2
-from bg_subtractor_utils import pad_image_to_divisible, calculate_patches_alg_heat_maps_for_k_values, plot_k_heat_maps, \
+from .bg_subtractor_utils import pad_image_to_divisible, calculate_patches_alg_heat_maps_for_k_values, plot_k_heat_maps, \
     plot_heat_map, ViTMode, ViTModelType, normalize_array, create_gt_attention
-from dino.visualize_attention import display_instances
+from .dino.visualize_attention import display_instances
 
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
@@ -86,7 +86,8 @@ class BGSubtractionWithDinoVit:
         w_featmap = img.shape[-2] // self.vit_patch_size
         h_featmap = img.shape[-1] // self.vit_patch_size
         if self.model_mode == ViTMode.CLS_SELF_ATTENTION.value:
-            attentions = self.model.get_last_selfattention(img.to(device))
+            with torch.no_grad():
+                attentions = self.model.get_last_selfattention(img.to(device))
             nh = attentions.shape[1]  # number of head
 
             # we keep only the output patch attention

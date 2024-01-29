@@ -16,7 +16,7 @@ from mmdet.structures.bbox import HorizontalBoxes
 from mmengine.structures import InstanceData
 from mmdet.models.utils import unpack_gt_instances
 import torch.nn.functional as F
-
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 class ViTMode(Enum):
     CLS_SELF_ATTENTION = "class_token_self_attention"
@@ -227,7 +227,7 @@ def calculate_box_by_size_and_centers_in_xyxy_format(patch_size, center, max_siz
     return curr_bbox
 
 
-def extract_patches_accord_heatmap(heatmap: np.ndarray, patch_size: tuple, img_id: str, threshold_percentage=95,
+def extract_patches_accord_heatmap(heatmap: np.ndarray, patch_size: tuple, img_id: str, target_dir, threshold_percentage=85,
                                    padding=True, plot=False, title="") -> np.ndarray:
     score_heatmap = conv_heatmap(patch_size=patch_size, heatmap=heatmap)
     threshold_value = np.percentile(heatmap, threshold_percentage)
@@ -276,7 +276,7 @@ def extract_patches_accord_heatmap(heatmap: np.ndarray, patch_size: tuple, img_i
         show_predicted_boxes(patches_tensor, ax)
 
         plt.savefig(
-            f"/home/shoval/Documents/Repositories/single-image-bg-detector/results/normalized_gsd/dino_vit/class_token_self_attention/examples/90_with_paddding_avg_acore/{img_id}_heatmap_with_{title}_predicted_boxes.png")
+            os.path.join(target_dir, f"{img_id}_heatmap_with_{title}_predicted_boxes.png"))
     return patches_tensor, mask, patches_scores
 
 
@@ -300,20 +300,24 @@ def mask_img(imgid, dota_obj, mask):
 
 
 def assign_predicted_boxes_to_gt(bbox_assigner, predicted_boxes, data_batch, patch_size, img_id, dota_obj, heatmap,
-                                 plot=False, title=""):
+                                 filter_instances_accord_size=True, plot=False, title="", target_dir=""):
     patch_diag = np.sqrt(np.square(patch_size[0]) + np.square(patch_size[1]))
     formatted_predicted_patches = HorizontalBoxes(predicted_boxes)
     formatted_predicted_patches = InstanceData(priors=formatted_predicted_patches)
 
     gt_instances = unpack_gt_instances(data_batch['data_samples'])
     batch_gt_instances, batch_gt_instances_ignore, _ = gt_instances
-    diags = torch.sqrt(
-        torch.square(batch_gt_instances[0].bboxes.widths) + torch.square(batch_gt_instances[0].bboxes.heights))
-    filtered_instances_indices = np.where((diags < (patch_diag * 1.2)) & (diags > (patch_diag / 1.2)))[0]
-    filtered_instances = batch_gt_instances[0][filtered_instances_indices]
+    instances = batch_gt_instances[0]
+    filtered_instances_indices=[]
+    if filter_instances_accord_size:
+        diags = torch.sqrt(
+            torch.square(batch_gt_instances[0].bboxes.widths) + torch.square(batch_gt_instances[0].bboxes.heights))
+        filtered_instances_indices = np.where((diags < (patch_diag * 1.2)) & (diags > (patch_diag / 1.2)))[0]
+        instances = batch_gt_instances[0][filtered_instances_indices]
+
 
     assign_result = bbox_assigner.assign(
-        formatted_predicted_patches, filtered_instances,
+        formatted_predicted_patches.to(device), instances.to(device),
         batch_gt_instances_ignore[0])
     dt_match = assign_result.gt_inds
     found_gt_indices = dt_match[torch.nonzero(dt_match > 0)] - 1
@@ -325,22 +329,85 @@ def assign_predicted_boxes_to_gt(bbox_assigner, predicted_boxes, data_batch, pat
         extent = 0, heatmap.shape[0], 0, heatmap.shape[0]
         plt.imshow(np.flipud(original_img), extent=extent)
         plt.imshow(heatmap, alpha=.5)
-        show_predicted_boxes(predicted_boxes=predicted_boxes, ax=ax, gt_boxes=filtered_instances['bboxes'].tensor,
+        show_predicted_boxes(predicted_boxes=predicted_boxes, ax=ax, gt_boxes=instances['bboxes'].tensor,
                              found_gt_indices=found_gt_indices)
         plt.colorbar()
         plt.savefig(
-            f"/home/shoval/Documents/Repositories/single-image-bg-detector/results/normalized_gsd/dino_vit/class_token_self_attention/examples/90_with_paddding_avg_acore/{img_id}_gt_with_heatmap_and_{title}_predicted_boxes.png")
+            os.path.join(target_dir, f"{img_id}_gt_with_heatmap_and_{title}_predicted_boxes.png"))
     return assign_result, filtered_instances_indices
 
+def extract_and_save_single_bbox(poly, image, class_name, output_dir, name, logger):
+    height, width = image.shape[0], image.shape[1]
+    min_x = min(max(0, poly[0].item()), width)
+    max_x = min(max(0, poly[2].item()), width)
+    min_y = min(max(0, poly[1].item()), height)
+    max_y = min(max(0, poly[3].item()), height)
+
+    # crop patch
+    if min_y > height or min_y >= max_y:
+        return
+    if min_x > width or min_x >= max_x:
+        return
+
+    patch = image[min_y:max_y, min_x:max_x, ...]
+    # put patch in its class folder
+    try:
+        patch_path = os.path.join(output_dir, class_name, name + '.png')
+
+        patch_img = Image.fromarray(patch)
+        patch_img.save(patch_path)
+    except Exception as error:
+        logger.info(f"[FILE WRITE ERROR] The file {name} can't be saved, {error} \n")
+        return
+
+def extract_and_save_bboxes(labels_names, predicted_boxes, predicted_boxes_labels, image, output_dir, img_id, logger):
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    unique_labels = torch.unique(predicted_boxes_labels)
+    for unique_label in unique_labels:
+        label = "background" if unique_label == -1 else labels_names[unique_label]
+        label_dir = os.path.join(output_dir, label)
+        os.makedirs(os.path.join(label_dir), exist_ok=True)
+    for box_ind, box in enumerate(predicted_boxes):
+        class_name = "background" if predicted_boxes_labels[box_ind].item() == -1 else labels_names[predicted_boxes_labels[box_ind].item()]
+        extract_and_save_single_bbox(poly=box, image=image, class_name=class_name, output_dir=output_dir,
+                                     name=f"{img_id}_{box_ind}", logger=logger)
+
+
+
+
 def assign_predicted_boxes_to_gt_boxes_using_hypothesis(bbox_assigner, predicted_boxes, data_batch, patch_size, img_id,
-                                                        dota_obj, heatmap, plot=False, title=""):
-    predicted_boxes, _, _ = assign_predicted_boxes_to_gt_accord_intersection(bbox_assigner, predicted_boxes, data_batch, img_id, dota_obj, heatmap,
-                                                                          patch_size, additional_patches_sizes=((11,21), (21,11)), plot=plot, title=title)
-    assign_result, filtered_instances_indices = assign_predicted_boxes_to_gt(bbox_assigner, predicted_boxes, data_batch,
-                                                                             patch_size, img_id, dota_obj, heatmap,
-                                                                             plot, title)
+                                                        labels_names, dota_obj, heatmap, extract_bbox_path, logger, plot=False,
+                                                        title="", target_dir=""):
+    predicted_boxes, _, _ = assign_predicted_boxes_to_gt_accord_intersection(bbox_assigner, predicted_boxes, data_batch,
+                                                                             img_id, dota_obj, heatmap, patch_size,
+                                                                             additional_patches_sizes=((11,21), (21,11)),
+                                                                             plot=plot, title=title, target_dir=target_dir)
+    assign_result, _ = assign_predicted_boxes_to_gt(bbox_assigner=bbox_assigner, predicted_boxes=predicted_boxes,
+                                                    data_batch=data_batch, patch_size=patch_size, img_id=img_id,
+                                                    dota_obj=dota_obj, heatmap=heatmap,
+                                                    filter_instances_accord_size=False,
+                                                    plot=plot, title=title, target_dir=target_dir)
     # collect predicted_boxes labels and cut it out the images and save it in an appropriate folders
-    x=1
+    assigned_bboxes_indices = torch.nonzero(assign_result.gt_inds != -1)
+    image = dota_obj.loadImgs(img_id)
+    image = cv2.resize(image[0], heatmap.shape)
+    predicted_boxes_labels = assign_result.labels[assigned_bboxes_indices]
+    extract_and_save_bboxes(labels_names=labels_names, predicted_boxes=predicted_boxes[assigned_bboxes_indices].squeeze(dim=1), predicted_boxes_labels=predicted_boxes_labels,
+                            image=image, output_dir=extract_bbox_path, img_id=img_id, logger=logger)
+
+def assign_predicted_boxes_to_gt_boxes_and_save_val_stage(bbox_assigner, predicted_boxes, data_batch, patch_size, img_id,
+                                                        labels_names, dota_obj, heatmap, extract_bbox_path, logger, plot=False, title="", target_dir=""):
+    assign_result, _ = assign_predicted_boxes_to_gt(bbox_assigner=bbox_assigner, predicted_boxes=predicted_boxes,
+                                                    data_batch=data_batch, patch_size=patch_size, img_id=img_id,
+                                                    dota_obj=dota_obj, heatmap=heatmap,
+                                                    filter_instances_accord_size=False,
+                                                    plot=plot, title=title, target_dir=target_dir)
+    image = dota_obj.loadImgs(img_id)
+    image = cv2.resize(image[0], heatmap.shape)
+    extract_and_save_bboxes(labels_names=labels_names,
+                            predicted_boxes=predicted_boxes,
+                            predicted_boxes_labels=assign_result.labels,
+                            image=image, output_dir=extract_bbox_path, img_id=img_id, logger=logger)
 
 
 def assign_predicted_boxes_to_gt_and_calc_performance(bbox_assigner, predicted_boxes, data_batch, img_id, dota_obj, heatmap,
@@ -353,7 +420,8 @@ def assign_predicted_boxes_to_gt_and_calc_performance(bbox_assigner, predicted_b
     return filtered_instances_indices, dt_labels, dt_match
 
 def assign_predicted_boxes_to_gt_accord_intersection(bbox_assigner, predicted_boxes, data_batch, img_id, dota_obj, heatmap,
-                                                                          patch_size, additional_patches_sizes=((11,21), (21,11)), plot=False, title=""):
+                                                     patch_size, additional_patches_sizes=((11,21), (21,11)),
+                                                     plot=False, title="", target_dir=""):
     # TODO: refer the case in which patch size has odd sizes
     patch_diag = np.sqrt(np.square(patch_size[0]) + np.square(patch_size[1]))
     formatted_predicted_patches = HorizontalBoxes(predicted_boxes)
@@ -365,7 +433,7 @@ def assign_predicted_boxes_to_gt_accord_intersection(bbox_assigner, predicted_bo
         torch.square(batch_gt_instances[0].bboxes.widths) + torch.square(batch_gt_instances[0].bboxes.heights))
     filtered_instances_indices = np.where((diags<(patch_diag*1.2)) & (diags>(patch_diag/1.2)))[0]
     filtered_instances = batch_gt_instances[0][filtered_instances_indices]
-    overlaps = bbox_assigner.iou_calculator(filtered_instances.bboxes, formatted_predicted_patches.priors)
+    overlaps = bbox_assigner.iou_calculator(filtered_instances.bboxes.to(device), formatted_predicted_patches.priors.to(device))
     tp = torch.sum(torch.max(overlaps, axis=1).values>0).item()
     found_gt_indices = torch.nonzero(torch.max(overlaps, axis=1).values>0)
 
@@ -378,7 +446,7 @@ def assign_predicted_boxes_to_gt_accord_intersection(bbox_assigner, predicted_bo
             center = center.int().tolist()
             curr_bbox=calculate_box_by_size_and_centers_in_xyxy_format(patch_size=additional_patch_size, center=(center[1],center[0]), max_size=heatmap.shape)
             additional_hypothesis.append(curr_bbox)
-    additional_hypothesis_tensor = torch.tensor(additional_hypothesis)
+    additional_hypothesis_tensor = torch.tensor(additional_hypothesis).to(torch.int64)
     predicted_boxes = torch.cat((predicted_boxes,additional_hypothesis_tensor))
     if plot:
         fig, ax = plt.subplots()
@@ -391,7 +459,7 @@ def assign_predicted_boxes_to_gt_accord_intersection(bbox_assigner, predicted_bo
                              found_gt_indices=found_gt_indices)
         plt.colorbar()
         plt.savefig(
-            f"/home/shoval/Documents/Repositories/single-image-bg-detector/results/normalized_gsd/dino_vit/class_token_self_attention/examples/90_with_paddding_avg_acore/{img_id}_gt_with_heatmap_and_{title}_predicted_boxes.png")
+            os.path.join(target_dir, f"{img_id}_gt_with_heatmap_and_{title}_predicted_boxes_intersect.png"))
     return predicted_boxes, filtered_instances_indices,tp
 
 
