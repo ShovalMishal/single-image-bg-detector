@@ -388,7 +388,11 @@ def assign_predicted_boxes_to_gt_boxes_using_hypothesis(bbox_assigner, predicted
                                                     filter_instances_accord_size=False,
                                                     plot=plot, title=title, target_dir=target_dir)
     # collect predicted_boxes labels and cut it out the images and save it in an appropriate folders
-    assigned_bboxes_indices = torch.nonzero(assign_result.gt_inds != -1)
+    assigned_bboxes_indices_foreground = torch.nonzero(assign_result.gt_inds > 0)
+    assigned_bboxes_indices_background = torch.nonzero(assign_result.gt_inds == 0)
+    assigned_bboxes_indices_background = assigned_bboxes_indices_background[torch.randperm(
+        len(assigned_bboxes_indices_background))[:int(0.1 * len(assigned_bboxes_indices_background))]]
+    assigned_bboxes_indices = torch.cat((assigned_bboxes_indices_foreground, assigned_bboxes_indices_background), dim=0)
     image = dota_obj.loadImgs(img_id)
     image = cv2.resize(image[0], heatmap.shape)
     predicted_boxes_labels = assign_result.labels[assigned_bboxes_indices]
