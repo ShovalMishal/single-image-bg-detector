@@ -19,7 +19,7 @@ dataloader = dict(
             dict(
                 type='ConvertBoxType',
                 box_type_mapping=dict(gt_bboxes='hbox')),
-            dict(type='mmdet.Resize', scale=(480, 480), keep_ratio=True),
+            dict(type='mmdet.Resize', scale=(512, 512), keep_ratio=True),
             dict(type='Normalize', mean=(0, 0, 0), std=(255.0, 255.0, 255.0), to_rgb=False),
             dict(type='Normalize', mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
             dict(
