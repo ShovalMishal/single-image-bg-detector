@@ -2,4 +2,6 @@ results
 docker_results
 runai_output
 .idea/
-
+__pycache__
+single_image_bg_detector.egg-info
+examples
