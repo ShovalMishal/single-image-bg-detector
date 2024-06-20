@@ -2,8 +2,8 @@ dataloader = dict(
     batch_size=1,
     # num_workers=2,
     num_workers=0,
-    # persistent_workers=True,
-    persistent_workers=False,
+    persistent_workers=True,
+    # persistent_workers=False,
     drop_last=False,
     sampler=dict(type='DefaultSampler', shuffle=False),
     dataset=dict(

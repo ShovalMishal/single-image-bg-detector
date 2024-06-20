@@ -1,3 +1,4 @@
+import json
 import math
 import os
 from enum import Enum
@@ -21,6 +22,9 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 class ViTMode(Enum):
     CLS_SELF_ATTENTION = "class_token_self_attention"
     LAST_BLOCK_OUTPUT = "last_block_output"
+    KEY = "key"
+    VALUE = "value"
+    QUERY = "query"
 
 
 class ViTModelType(Enum):
@@ -105,8 +109,8 @@ def plot_k_heat_maps(k_to_heat_map, heat_map_width, heat_map_height, target_dir,
     orig_image_size = orig_image.shape
 
     for k in k_values:
-        filenames = [f'distance to {k}-th neighbour, image:{imgid}',
-                     f'{k}-th_neighbour_distance_overlaid_on_image_{imgid}']
+        filenames = [f'distance to {k}-th neighbour',
+                     f'{k}-th_neighbour_distance_overlaid_on_image']
         heatmap = k_to_heat_map[k].reshape((heat_map_width, heat_map_height)) / k_to_heat_map[k].reshape(
             (heat_map_width, heat_map_height)).max()
         plot_heat_map(heatmap=heatmap,
@@ -119,7 +123,7 @@ def plot_heat_map(heatmap, imgid, target_dir, dota_obj, anns, orig_image_size,
     plt.clf()
     plt.title(filenames[0])
     plt.imshow(heatmap)
-    plt.colorbar()
+    # plt.colorbar()
     plt.savefig(os.path.join(target_dir, imgid, f'{filenames[0]}.png'))
 
     plt.clf()
@@ -134,7 +138,7 @@ def plot_heat_map(heatmap, imgid, target_dir, dota_obj, anns, orig_image_size,
     plt.imshow(orig_image)
     plt.imshow(heatmap, alpha=.5, interpolation='bilinear',
                extent=extent)
-    plt.colorbar()
+    # plt.colorbar()
     plt.subplot(1, 2, 2)
     plt.title('ground truth')
     dota_obj.showAnns(anns, imgid, 2)
@@ -511,3 +515,68 @@ def calculate_performance_measures(gt, scores):
     ap = average_precision_score(gt, scores)
     auc = roc_auc_score(gt, scores)
     return ap, auc
+
+def plot_comparison_graphs(mode="attentions", vit_architecture="small"):
+    results_dir = "/home/shoval/Documents/Repositories/single-image-bg-detector/results/normalized_gsd/train/"
+    dino_vit_dir = os.path.join(results_dir, "dino_vit")
+    dino_mc_vit_dir = os.path.join(results_dir, "dino_mc_vit")
+    dino_vit_base_dir = os.path.join(results_dir, "dino_vit_base")
+
+    if mode == "representations":
+        pass
+    elif mode == "attentions":
+        if vit_architecture == "small":
+            dino_vit_atten_dir = os.path.join(dino_vit_dir, "class_token_self_attention")
+            dino_mc_vit_atten_dir = os.path.join(dino_mc_vit_dir, "class_token_self_attention")
+            dino_vit, max_ap_dino_vit_head_num, max_auc_dino_vit_head_num = load_performance_measures(dino_vit_atten_dir)
+            dino_mc, max_ap_dino_mc_head_num, max_auc_dino_mc_head_num = load_performance_measures(dino_mc_vit_atten_dir)
+            if dino_vit[max_ap_dino_vit_head_num]['ap'] > dino_mc[max_ap_dino_mc_head_num]['ap']:
+                print(f"dino_vit head number {max_ap_dino_vit_head_num} yields the best ap - {dino_vit[max_ap_dino_vit_head_num]['ap']}\n" )
+            else:
+                print(f"dino_mc head number {max_ap_dino_mc_head_num} yields the best ap - { dino_mc[max_ap_dino_mc_head_num]['ap']}\n")
+            if dino_vit[max_auc_dino_vit_head_num]['auc'] > dino_mc[max_auc_dino_mc_head_num]['auc']:
+                print(f"dino_vit head number {max_auc_dino_vit_head_num} yields the best auc - {dino_vit[max_auc_dino_vit_head_num]['auc']}\n")
+            else:
+                print(f"dino_mc head number {max_auc_dino_mc_head_num} yields the best auc - {dino_mc[max_auc_dino_mc_head_num]['auc']}\n")
+
+            plt.clf()
+            plt.plot([head_num for head_num, values in dino_vit.items()], [values["ap"] for head_num, values in dino_vit.items()], 'bo', label="dino_vit_ap")
+            plt.plot([head_num for head_num, values in dino_mc.items()], [values["ap"] for head_num, values in dino_mc.items()], 'ro', label="dino_mc_ap")
+            plt.plot([head_num for head_num, values in dino_vit.items()], [values["auc"] for head_num, values in dino_vit.items()], 'go', label="dino_vit_auc")
+            plt.plot([head_num for head_num, values in dino_mc.items()], [values["auc"] for head_num, values in dino_mc.items()], 'yo', label="dino_mc_auc")
+            plt.legend()
+            plt.grid()
+            plt.title("Vit small based models - AP and AuC comparison")
+            plt.savefig(os.path.join(results_dir, "vit_small_arch_attention_comparison.png"))
+
+
+
+def load_performance_measures(dir):
+    results = {}
+    max_ap_head_num = 0
+    max_auc_head_num = 0
+    max_ap = 0
+    max_auc = 0
+    for filename in os.listdir(dir):
+        if filename.endswith(".json"):
+            file_path = os.path.join(dir, filename)
+            with open(file_path, 'r') as file:
+                json_data = json.load(file)
+            head_num=int(filename.split(".")[0].split("_")[-1])
+            results[head_num] = {}
+            results[head_num]["ap"] = json_data["mean_ap"]
+            results[head_num]["auc"] = json_data["mean_auc"]
+            if results[head_num]["ap"] > max_ap:
+                max_ap = results[head_num]["ap"]
+                max_ap_head_num=head_num
+            if results[head_num]["auc"] > max_auc:
+                max_auc = results[head_num]["auc"]
+                max_auc_head_num=head_num
+
+    return results, max_ap_head_num, max_auc_head_num
+
+if __name__ == '__main__':
+    plot_comparison_graphs()
+
+
+

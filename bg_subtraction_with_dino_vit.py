@@ -1,24 +1,22 @@
 import os
-from enum import Enum
 import torch
 import torchvision
 from PIL import Image
 import numpy as np
 from torch import nn
 import matplotlib.pyplot as plt
-import single_image_bg_detector.dino.vision_transformer as vits
+import dino.vision_transformer as vits
 from torchvision import transforms as pth_transforms
 import skimage.io
-import cv2
-from .bg_subtractor_utils import pad_image_to_divisible, calculate_patches_alg_heat_maps_for_k_values, plot_k_heat_maps, \
-    plot_heat_map, ViTMode, ViTModelType, normalize_array, create_gt_attention
-from .dino.visualize_attention import display_instances
+from bg_subtractor_utils import calculate_patches_alg_heat_maps_for_k_values, plot_k_heat_maps, \
+    plot_heat_map, ViTMode, ViTModelType, create_gt_attention
+from dino.visualize_attention import display_instances
 
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
 
 class BGSubtractionWithDinoVit:
-    def __init__(self, target_dir, vit_patch_size, vit_arch, vit_image_size, dota_obj, threshold,
+    def __init__(self, target_dir, vit_patch_size, vit_arch, vit_image_size, dota_obj, threshold, attention_num, layer_num,
                  pretrained_weights="", checkpoint_key="", model_mode=ViTMode.CLS_SELF_ATTENTION.value,
                  model_type=ViTModelType.DINO_MC.value):
         self.model = None
@@ -26,18 +24,26 @@ class BGSubtractionWithDinoVit:
         self.model_mode = model_mode
         self.vit_patch_size = vit_patch_size
         self.vit_image_size = vit_image_size
-        self.target_dir = os.path.join(target_dir, model_type)
+        self.target_dir = os.path.join(target_dir, model_type) if vit_arch != "vit_base" else os.path.join(target_dir, model_type+"_base")
         os.makedirs(self.target_dir, exist_ok=True)
         if self.model_mode == ViTMode.CLS_SELF_ATTENTION.value:
             self.target_dir = os.path.join(self.target_dir, ViTMode.CLS_SELF_ATTENTION.value)
-            os.makedirs(self.target_dir, exist_ok=True)
-        else:
+        elif self.model_mode == ViTMode.CLS_SELF_ATTENTION.value:
             self.target_dir = os.path.join(self.target_dir, ViTMode.LAST_BLOCK_OUTPUT.value)
-            os.makedirs(self.target_dir, exist_ok=True)
+        elif self.model_mode == ViTMode.KEY.value:
+            self.target_dir = os.path.join(self.target_dir, ViTMode.KEY.value)
+        elif self.model_mode == ViTMode.QUERY.value:
+            self.target_dir = os.path.join(self.target_dir, ViTMode.QUERY.value)
+        elif self.model_mode == ViTMode.VALUE.value:
+            self.target_dir = os.path.join(self.target_dir, ViTMode.VALUE.value)
+        os.makedirs(self.target_dir, exist_ok=True)
+
         self.dota_obj = dota_obj
         self.threshold = threshold
         self.init_model(vit_arch, vit_patch_size, model_type, pretrained_weights=pretrained_weights,
                         checkpoint_key=checkpoint_key)
+        self.attention_num = attention_num
+        self.layer_num = layer_num
 
     def init_model(self, vit_arch, vit_patch_size, model_type, pretrained_weights="", checkpoint_key=""):
         self.model = vits.__dict__[vit_arch](patch_size=vit_patch_size, num_classes=0)
@@ -93,13 +99,15 @@ class BGSubtractionWithDinoVit:
             # we keep only the output patch attention
             attentions = attentions[0, :, 0, 1:].reshape(nh, -1)
             attentions = attentions.reshape(nh, w_featmap, h_featmap)
+
             attentions = \
                 nn.functional.interpolate(attentions.unsqueeze(0), scale_factor=self.vit_patch_size, mode="bilinear")[
                     0].cpu().numpy()
-
-            # add average attention
-            attentions = np.concatenate((attentions, np.mean(attentions, axis=0)[None, :]), axis=0)
-            return attentions[-1]
+            if self.attention_num == 0:
+                res = np.mean(attentions, axis=0)
+            else:
+                res = attentions[self.attention_num-1,:,:]
+            return res
         elif self.model_mode == ViTMode.LAST_BLOCK_OUTPUT.value:
             output = self.model.get_last_block(img.to(device))[1:, :].cpu()
             k_to_heat_map = calculate_patches_alg_heat_maps_for_k_values(heat_map_width=w_featmap,
@@ -119,25 +127,17 @@ class BGSubtractionWithDinoVit:
 
     def run_on_image_path(self, imgid, plot_result=False):
         anns = self.dota_obj.loadAnns(imgId=imgid)
-        # gt_attention = self.create_gt_attention(anns=anns)
         image_path = os.path.join(self.dota_obj.imagepath, imgid + '.png')
         if os.path.isfile(image_path):
             with open(image_path, 'rb') as f:
                 img = Image.open(f)
                 orig_img = img.convert('RGB')
-        if self.model_type == ViTModelType.DINO_VIT.value:
-            transform = pth_transforms.Compose([
-                pth_transforms.Resize(self.vit_image_size),
-                pth_transforms.ToTensor(),
-                pth_transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
-            ])
-        else:
-            transform = pth_transforms.Compose([
-                pth_transforms.Resize(256, interpolation=3),
-                # pth_transforms.CenterCrop(224),
-                pth_transforms.ToTensor(),
-                pth_transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
-            ])
+        transform = pth_transforms.Compose([
+            pth_transforms.Resize(self.vit_image_size),
+            pth_transforms.ToTensor(),
+            pth_transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+        ])
+
         scale_factor = self.vit_image_size[0] / orig_img.size[0]
         gt_attention = create_gt_attention(anns=anns, scale_factor=scale_factor, image_size=self.vit_image_size)
         transform_to_view_original = pth_transforms.Compose([
@@ -178,10 +178,14 @@ class BGSubtractionWithDinoVit:
 
             attentions = attentions.reshape(nh, w_featmap, h_featmap)
             attentions = \
-                nn.functional.interpolate(attentions.unsqueeze(0), scale_factor=self.vit_patch_size, mode="nearest")[
+                nn.functional.interpolate(attentions.unsqueeze(0), scale_factor=self.vit_patch_size, mode="bilinear")[
                     0].cpu().numpy()
             # add average attention
             attentions = np.concatenate((attentions, np.mean(attentions, axis=0)[None, :]), axis=0)
+            if self.attention_num == 0:
+                res = attentions[-1]
+            else:
+                res = attentions[self.attention_num-1,:,:]
             # save attentions heatmaps
             if plot_result:
                 os.makedirs(os.path.join(self.target_dir, imgid), exist_ok=True)
@@ -206,10 +210,19 @@ class BGSubtractionWithDinoVit:
                                                                             "mask_th" + str(
                                                                                 self.threshold) + "_head" + str(
                                                                                 j) + ".png"), blur=False)
-            return attentions[-1], gt_attention
+            return res, gt_attention
+        else:
+            if self.model_mode == ViTMode.LAST_BLOCK_OUTPUT.value:
+                output = self.model.get_last_block(img.to(device))[1:, :].cpu()
+            else:
+                q, k, v = self.model.get_qkv_per_layer(img.to(device), layer_num=self.layer_num)
+                if self.model_mode == ViTMode.QUERY.value:
+                    output = q.cpu()
+                elif self.model_mode == ViTMode.KEY.value:
+                    output = k.cpu()
+                else:
+                    output = v.cpu()
 
-        elif self.model_mode == ViTMode.LAST_BLOCK_OUTPUT.value:
-            output = self.model.get_last_block(img.to(device))[1:, :].cpu()
             k_to_heat_map = calculate_patches_alg_heat_maps_for_k_values(heat_map_width=w_featmap,
                                                                          heat_map_height=h_featmap,
                                                                          flattened_pathces_matrix=output)
@@ -223,7 +236,7 @@ class BGSubtractionWithDinoVit:
             returned_heat_map = \
                 nn.functional.interpolate(torch.tensor(returned_heat_map).unsqueeze(dim=0).unsqueeze(dim=0),
                                           scale_factor=self.vit_patch_size,
-                                          mode="nearest")[0][0]
+                                          mode="bilinear")[0][0]
             return returned_heat_map.numpy(), gt_attention
 
     def run_on_tensor(self, image: torch.tensor) -> torch.tensor:

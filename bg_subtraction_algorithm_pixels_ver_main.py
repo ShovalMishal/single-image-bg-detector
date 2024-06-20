@@ -1,15 +1,10 @@
 import argparse
 import json
 import os
-from enum import Enum
 import numpy as np
 from DOTA_devkit.DOTA import DOTA
 from bg_subtraction_accord_pixels import bg_detector_alg_pixels_ver
-from bg_subtraction_with_dino_vit import BGSubtractionWithDinoVit
 from bg_subtractor_utils import ViTMode, ViTModelType, plot_precision_recall_curve, plot_roc_curve
-from mmengine.runner import Runner
-from mmengine.config import Config
-import copy
 from tqdm import tqdm
 
 

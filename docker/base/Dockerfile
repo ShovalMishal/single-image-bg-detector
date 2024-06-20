@@ -1,29 +1,33 @@
-ARG UBUNTU_VER=16.04
-ARG CONDA_VER=latest
-ARG OS_TYPE=x86_64
+ARG PYTORCH="1.12.1"
+ARG CUDA="11.3"
+ARG CUDNN="8"
 
+FROM pytorch/pytorch:${PYTORCH}-cuda${CUDA}-cudnn${CUDNN}-devel
 
-FROM nvidia/cuda:11.0.3-base-ubuntu${UBUNTU_VER}
+ENV TORCH_CUDA_ARCH_LIST="6.0 6.1 7.0+PTX"
+ENV TORCH_NVCC_FLAGS="-Xfatbin -compress-all"
+ENV CMAKE_PREFIX_PATH="$(dirname $(which conda))/../"
 
+# To fix GPG key error when running apt-get update
+RUN apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu1804/x86_64/3bf863cc.pub
+RUN apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/machine-learning/repos/ubuntu1804/x86_64/7fa2af80.pub
 
-# System packages
-RUN apt-get update && \
-    apt-get install ffmpeg libsm6 libxext6  -y && \
-    apt-get install -yq curl wget jq vim git tree && \
-    apt-get install openssh-server sudo -y && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ffmpeg libsm6 libxext6 git ninja-build libglib2.0-0 libsm6 libxrender-dev libxext6 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
-# Use the above args during building https://docs.docker.com/engine/reference/builder/#understand-how-arg-and-from-interact
-ARG CONDA_VER
-ARG OS_TYPE
-# Install miniconda
-ENV CONDA_DIR /opt/conda
-RUN wget --quiet https://repo.anaconda.com/miniconda/Miniconda3-${CONDA_VER}-Linux-${OS_TYPE}.sh -O ~/miniconda.sh && \
-    /bin/bash ~/miniconda.sh -b -p /opt/conda
+RUN conda install scikit-image scikit-learn plotly
 
-# Put conda in path
-ENV PATH=${CONDA_DIR}/bin:${PATH}
-COPY environment.yml .
-RUN conda update -y conda && \
-    conda env update --file environment.yml --name base
+# Install MMCV MMDetection
+RUN pip install -U openmim && mim install mmengine && mim install "mmcv>=2.0.0rc4, <2.1.0"
+
+# # Install MMRotate
+RUN git clone --branch dev-3.x https://github.com/ShovalMishal/mmdection.git /mmdetection
+RUN pip install --no-cache-dir -e /mmdetection
+RUN git clone --branch dev-1.x https://github.com/ShovalMishal/mmrotate.git /mmrotate
+RUN pip install --no-cache-dir -e /mmrotate
+
+RUN pip install ipdb
+RUN pip install transformers
+RUN pip install pytorch-lightning
+
