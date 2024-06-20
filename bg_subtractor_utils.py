@@ -213,12 +213,12 @@ def plot_roc_curve(gt, heatmap, title="", result_path: str = ""):
 
 
 def conv_heatmap(patch_size, heatmap):
-    window = torch.ones(patch_size)
+    window = torch.ones(patch_size, device=device)
     heatmap_shape = heatmap.shape
-    result = F.conv2d(torch.tensor(heatmap).view(1, 1, heatmap_shape[0], heatmap_shape[1]),
+    result = F.conv2d(heatmap.view(1, 1, heatmap_shape[0], heatmap_shape[1]),
                             window.view(1, 1, patch_size[0], patch_size[1]),
                             padding='same')
-    result = result[0][0].numpy()
+    result = result[0][0]
     return result
 
 def calculate_box_by_size_and_centers_in_xyxy_format(patch_size, center, max_size):
@@ -231,14 +231,31 @@ def calculate_box_by_size_and_centers_in_xyxy_format(patch_size, center, max_siz
     return curr_bbox
 
 
-def extract_patches_accord_heatmap(heatmap: np.ndarray, patch_size: tuple, img_id: str, target_dir, threshold_percentage=85,
+def unravel_index(index, shape):
+  """Converts a flattened index into a tuple of coordinate indices.
+
+  Args:
+    index: A tensor of flattened indices (shape: (*,)).
+    shape: The target shape of the original tensor (tuple).
+
+  Returns:
+    A tensor of unraveled coordinates (shape: (*, D)).
+  """
+
+  out = []
+  for dim in reversed(shape):
+    out.append(index % dim)
+    index = torch.div(index, dim, rounding_mode='floor')
+  return tuple(reversed(out))
+
+def extract_patches_accord_heatmap(heatmap: np.ndarray, patch_size: tuple, img_id: str, target_dir=None, threshold_percentage=85,
                                    padding=True, plot=False, title="") -> np.ndarray:
     score_heatmap = conv_heatmap(patch_size=patch_size, heatmap=heatmap)
-    threshold_value = np.percentile(heatmap, threshold_percentage)
-    heatmap_copy = np.copy(heatmap)
-    curr_max_val = np.max(heatmap_copy)
-    argmax_index = np.argmax(heatmap_copy)
-    max_index_matrix = np.unravel_index(argmax_index, heatmap_copy.shape)
+    threshold_value = torch.quantile(heatmap, threshold_percentage/100)
+    heatmap_copy = heatmap.clone()
+    curr_max_val = torch.max(heatmap_copy)
+    argmax_index = torch.argmax(heatmap_copy)
+    max_index_matrix = unravel_index(argmax_index, heatmap_copy.shape)
     patches_list = []
     patches_scores = []
     heatmap_size = heatmap.shape
@@ -260,20 +277,21 @@ def extract_patches_accord_heatmap(heatmap: np.ndarray, patch_size: tuple, img_i
             curr_buffered_patch_size = (curr_buffered_patch_bottom_right_h - curr_buffered_patch_top_left_h,
                                         curr_buffered_patch_bottom_right_w - curr_buffered_patch_top_left_w)
             heatmap_copy[curr_buffered_patch_top_left_h:curr_buffered_patch_bottom_right_h,
-            curr_buffered_patch_top_left_w:curr_buffered_patch_bottom_right_w] = np.zeros(
+            curr_buffered_patch_top_left_w:curr_buffered_patch_bottom_right_w] = torch.zeros(
                 (curr_buffered_patch_size[0], curr_buffered_patch_size[1]))
         else:
             heatmap_copy[curr_bbox[1]:curr_bbox[3],
-        curr_bbox[0]:curr_bbox[2]] = np.zeros((curr_patch_size[0], curr_patch_size[1]))
+        curr_bbox[0]:curr_bbox[2]] = torch.zeros((curr_patch_size[0], curr_patch_size[1]))
 
         mask[curr_bbox[1]:curr_bbox[3],
-        curr_bbox[0]:curr_bbox[2]] = np.ones((curr_patch_size[0], curr_patch_size[1]))
+        curr_bbox[0]:curr_bbox[2]] = torch.ones((curr_patch_size[0], curr_patch_size[1]))
 
-        curr_max_val = np.max(heatmap_copy)
-        argmax_index = np.argmax(heatmap_copy)
-        max_index_matrix = np.unravel_index(argmax_index, heatmap_copy.shape)
-    patches_tensor = torch.tensor(patches_list)
+        curr_max_val = torch.max(heatmap_copy)
+        argmax_index = torch.argmax(heatmap_copy)
+        max_index_matrix = unravel_index(argmax_index, heatmap_copy.shape)
+    patches_tensor = torch.tensor(patches_list, device=device)
     if plot:
+
         fig, ax = plt.subplots()
         plt.imshow(heatmap)
         plt.colorbar()
@@ -327,15 +345,22 @@ def assign_predicted_boxes_to_gt(bbox_assigner, predicted_boxes, data_batch, pat
     found_gt_indices = dt_match[torch.nonzero(dt_match > 0)] - 1
 
     if plot:
-        fig, ax = plt.subplots()
+        fig = plt.figure()
+        ax1 = fig.add_subplot(1, 2, 1)
+        ax1.axis('off')
         original_img = cv2.imread(os.path.join(dota_obj.imagepath, img_id + '.png'))
-        plt.title(f'{img_id}')
+        plt.title(f'proposals')
         extent = 0, heatmap.shape[0], 0, heatmap.shape[0]
-        plt.imshow(np.flipud(original_img), extent=extent)
-        plt.imshow(heatmap, alpha=.5)
-        show_predicted_boxes(predicted_boxes=predicted_boxes, ax=ax, gt_boxes=instances['bboxes'].tensor,
+        ax1.imshow(np.flipud(original_img), extent=extent)
+        ax1.imshow(np.flipud(heatmap), alpha=.5, extent=extent)
+        show_predicted_boxes(predicted_boxes=predicted_boxes, ax=ax1, gt_boxes=instances['bboxes'].tensor,
                              found_gt_indices=found_gt_indices)
-        plt.colorbar()
+        # fig.colorbar(ax1.images[-1], ax=ax1)
+        ax2 = fig.add_subplot(1, 2, 2)
+        plt.title(f'ground truth')
+        ax2.imshow(np.flipud(original_img), extent=extent)
+        ax2.axis('off')
+        show_gts(instances['bboxes'].tensor, ax2)
         plt.savefig(
             os.path.join(target_dir, f"{img_id}_gt_with_heatmap_and_{title}_predicted_boxes.png"))
     return assign_result, filtered_instances_indices
@@ -389,7 +414,7 @@ def assign_predicted_boxes_to_gt_boxes_using_hypothesis(bbox_assigner, predicted
     assign_result, _ = assign_predicted_boxes_to_gt(bbox_assigner=bbox_assigner, predicted_boxes=predicted_boxes,
                                                     data_batch=data_batch, patch_size=patch_size, img_id=img_id,
                                                     dota_obj=dota_obj, heatmap=heatmap,
-                                                    filter_instances_accord_size=False,
+                                                    filter_instances_accord_size=True,
                                                     plot=plot, title=title, target_dir=target_dir)
     # collect predicted_boxes labels and cut it out the images and save it in an appropriate folders
     assigned_bboxes_indices_foreground = torch.nonzero(assign_result.gt_inds > 0)
@@ -404,7 +429,8 @@ def assign_predicted_boxes_to_gt_boxes_using_hypothesis(bbox_assigner, predicted
                             image=image, output_dir=extract_bbox_path, img_id=img_id, logger=logger)
 
 def assign_predicted_boxes_to_gt_boxes_and_save_val_stage(bbox_assigner, predicted_boxes, data_batch, patch_size, img_id,
-                                                        labels_names, dota_obj, heatmap, extract_bbox_path, logger, plot=False, title="", target_dir=""):
+                                                        labels_names, dota_obj, heatmap, extract_bbox_path, logger,
+                                                          plot=False, title="", target_dir="", is_val=False):
     assign_result, _ = assign_predicted_boxes_to_gt(bbox_assigner=bbox_assigner, predicted_boxes=predicted_boxes,
                                                     data_batch=data_batch, patch_size=patch_size, img_id=img_id,
                                                     dota_obj=dota_obj, heatmap=heatmap,
@@ -412,9 +438,20 @@ def assign_predicted_boxes_to_gt_boxes_and_save_val_stage(bbox_assigner, predict
                                                     plot=plot, title=title, target_dir=target_dir)
     image = dota_obj.loadImgs(img_id)
     image = cv2.resize(image[0], heatmap.shape)
+    predicted_boxes_labels = assign_result.labels
+    # In the validation case we sample the background
+    if is_val:
+        assigned_bboxes_indices_foreground = torch.nonzero(assign_result.gt_inds > 0)
+        assigned_bboxes_indices_background = torch.nonzero(assign_result.gt_inds == 0)
+        assigned_bboxes_indices_background = assigned_bboxes_indices_background[torch.randperm(
+            len(assigned_bboxes_indices_background))[:int(0.01 * len(assigned_bboxes_indices_background))]]
+        assigned_bboxes_indices = torch.cat((assigned_bboxes_indices_foreground, assigned_bboxes_indices_background),
+                                            dim=0)
+        predicted_boxes = predicted_boxes[assigned_bboxes_indices].squeeze(dim=1)
+        predicted_boxes_labels = assign_result.labels[assigned_bboxes_indices]
     extract_and_save_bboxes(labels_names=labels_names,
                             predicted_boxes=predicted_boxes,
-                            predicted_boxes_labels=assign_result.labels,
+                            predicted_boxes_labels=predicted_boxes_labels,
                             image=image, output_dir=extract_bbox_path, img_id=img_id, logger=logger)
 
 
@@ -455,20 +492,28 @@ def assign_predicted_boxes_to_gt_accord_intersection(bbox_assigner, predicted_bo
             curr_bbox=calculate_box_by_size_and_centers_in_xyxy_format(patch_size=additional_patch_size, center=(center[1],center[0]), max_size=heatmap.shape)
             additional_hypothesis.append(curr_bbox)
     additional_hypothesis_tensor = torch.tensor(additional_hypothesis).to(torch.int64)
-    predicted_boxes = torch.cat((predicted_boxes,additional_hypothesis_tensor))
+    predicted_boxes = torch.cat((predicted_boxes, additional_hypothesis_tensor))
     if plot:
-        fig, ax = plt.subplots()
+        fig = plt.figure()
+        ax1 = fig.add_subplot(1, 2, 1)
+        ax1.axis('off')
         original_img = cv2.imread(os.path.join(dota_obj.imagepath, img_id + '.png'))
-        plt.title(f'{img_id}')
+        plt.title(f'heatmap')
         extent = 0, heatmap.shape[0], 0, heatmap.shape[0]
-        plt.imshow(np.flipud(original_img), extent=extent)
-        plt.imshow(heatmap, alpha=.5)
-        show_predicted_boxes(predicted_boxes=predicted_boxes, ax=ax, gt_boxes=filtered_instances['bboxes'].tensor,
-                             found_gt_indices=found_gt_indices)
-        plt.colorbar()
+        ax1.imshow(np.flipud(original_img), extent=extent)
+        ax1.imshow(np.flipud(heatmap), alpha=.5, extent=extent)
+        # fig.colorbar(ax1.images[-1], ax=ax1)
+        ax2 = fig.add_subplot(1, 2, 2)
+        plt.title(f'ground truth')
+        ax2.imshow(np.flipud(original_img), extent=extent)
+        ax2.axis('off')
+        gt_instances = unpack_gt_instances(data_batch['data_samples'])
+        batch_gt_instances, batch_gt_instances_ignore, _ = gt_instances
+        instances = batch_gt_instances[0]
+        show_gts(instances['bboxes'].tensor, ax2)
         plt.savefig(
-            os.path.join(target_dir, f"{img_id}_gt_with_heatmap_and_{title}_predicted_boxes_intersect.png"))
-    return predicted_boxes, filtered_instances_indices,tp
+            os.path.join(target_dir, f"{img_id}_with_heatmap_and_gt.png"))
+    return predicted_boxes, filtered_instances_indices, tp
 
 
 
@@ -482,7 +527,19 @@ def assign_predicted_boxes_to_gt_accord_intersection_and_calc_performance(bbox_a
     print(f"Discovered {tp} bbox out of {gt} for img {img_id}\n")
     return tp, gt, fp
 
-
+def show_gts(gt_boxes, ax):
+    if gt_boxes is not None:
+        gt_boxes_xy_format = [[(box[0].item(), box[1].item()), (box[2].item(), box[1].item()),
+                               (box[2].item(), box[3].item()), (box[0].item(), box[3].item())] for box in
+                              gt_boxes]
+        polygons = []
+        color = []
+        for box_ind, box in enumerate(gt_boxes_xy_format):
+            c = 'g'
+            color.append(c)
+            polygons.append(Polygon(box))
+        p = PatchCollection(polygons, facecolors='none', edgecolors=color, linewidths=2)
+        ax.add_collection(p)
 
 def show_predicted_boxes(predicted_boxes, ax, found_gt_indices=None, gt_boxes=None):
     predicted_boxes_xy_format = [[(box[0].item(), box[1].item()), (box[2].item(), box[1].item()),

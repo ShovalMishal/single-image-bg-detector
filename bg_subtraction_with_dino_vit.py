@@ -102,11 +102,14 @@ class BGSubtractionWithDinoVit:
 
             attentions = \
                 nn.functional.interpolate(attentions.unsqueeze(0), scale_factor=self.vit_patch_size, mode="bilinear")[
-                    0].cpu().numpy()
+                    0]
+
+            # add average attention
+            attentions = torch.cat((attentions, torch.mean(attentions, axis=0)[None, :]), axis=0)
             if self.attention_num == 0:
-                res = np.mean(attentions, axis=0)
+                res = attentions[-1]
             else:
-                res = attentions[self.attention_num-1,:,:]
+                res = attentions[self.attention_num - 1, :, :]
             return res
         elif self.model_mode == ViTMode.LAST_BLOCK_OUTPUT.value:
             output = self.model.get_last_block(img.to(device))[1:, :].cpu()
