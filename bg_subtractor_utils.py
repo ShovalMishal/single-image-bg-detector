@@ -17,6 +17,7 @@ from mmdet.structures.bbox import HorizontalBoxes
 from mmengine.structures import InstanceData
 from mmdet.models.utils import unpack_gt_instances
 import torch.nn.functional as F
+from mmrotate.structures.bbox import RotatedBoxes, rbox2qbox
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 class ViTMode(Enum):
@@ -320,66 +321,47 @@ def mask_img(imgid, dota_obj, mask):
     plt.imshow(masked_img)
     plt.show()
 
-
-def assign_predicted_boxes_to_gt(bbox_assigner, predicted_boxes, data_batch, patch_size, img_id, dota_obj, heatmap,
-                                 filter_instances_accord_size=True, plot=False, title="", target_dir=""):
-    patch_diag = np.sqrt(np.square(patch_size[0]) + np.square(patch_size[1]))
-    formatted_predicted_patches = HorizontalBoxes(predicted_boxes)
+def assign_predicted_boxes_to_gt(bbox_assigner, regressor_results, gt_instances, img_id, image_path, plot=False, title="",
+                                 target_dir="", visualizer=None):
+    formatted_predicted_patches = RotatedBoxes(regressor_results[0].pred_instances.bboxes)
     formatted_predicted_patches = InstanceData(priors=formatted_predicted_patches)
 
-    gt_instances = unpack_gt_instances(data_batch['data_samples'])
-    batch_gt_instances, batch_gt_instances_ignore, _ = gt_instances
-    instances = batch_gt_instances[0]
-    filtered_instances_indices=[]
-    if filter_instances_accord_size:
-        diags = torch.sqrt(
-            torch.square(batch_gt_instances[0].bboxes.widths) + torch.square(batch_gt_instances[0].bboxes.heights))
-        filtered_instances_indices = np.where((diags < (patch_diag * 1.2)) & (diags > (patch_diag / 1.2)))[0]
-        instances = batch_gt_instances[0][filtered_instances_indices]
-
-
     assign_result = bbox_assigner.assign(
-        formatted_predicted_patches.to(device), instances.to(device),
-        batch_gt_instances_ignore[0])
-    dt_match = assign_result.gt_inds
-    found_gt_indices = dt_match[torch.nonzero(dt_match > 0)] - 1
+        formatted_predicted_patches.to(device), gt_instances.to(device))
+
 
     if plot:
-        fig = plt.figure()
-        ax1 = fig.add_subplot(1, 2, 1)
-        ax1.axis('off')
-        original_img = cv2.imread(os.path.join(dota_obj.imagepath, img_id + '.png'))
-        plt.title(f'proposals')
-        extent = 0, heatmap.shape[0], 0, heatmap.shape[0]
-        ax1.imshow(np.flipud(original_img), extent=extent)
-        ax1.imshow(np.flipud(heatmap), alpha=.5, extent=extent)
-        show_predicted_boxes(predicted_boxes=predicted_boxes, ax=ax1, gt_boxes=instances['bboxes'].tensor,
-                             found_gt_indices=found_gt_indices)
-        # fig.colorbar(ax1.images[-1], ax=ax1)
-        ax2 = fig.add_subplot(1, 2, 2)
-        plt.title(f'ground truth')
-        ax2.imshow(np.flipud(original_img), extent=extent)
-        ax2.axis('off')
-        show_gts(instances['bboxes'].tensor, ax2)
-        plt.savefig(
-            os.path.join(target_dir, f"{img_id}_gt_with_heatmap_and_{title}_predicted_boxes.png"))
-    return assign_result, filtered_instances_indices
+        img = cv2.imread(image_path)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        # show proposals and gts
+        results = regressor_results[0]
+        results.pred_instances.scores = torch.tensor([1] * len(results.pred_instances.bboxes))
+        results.pred_instances.labels = torch.tensor([0] * len(results.pred_instances.bboxes))
+        visualizer.add_datasample(name='result',
+                                  image=img,
+                                  data_sample=results.detach().cpu(),
+                                  draw_gt=True,
+                                  out_file=os.path.join(target_dir,
+                                                        img_id + "_regressor_results.png"),
+                                  wait_time=0,
+                                  draw_text=False)
+    return assign_result
 
 def extract_and_save_single_bbox(poly, image, class_name, output_dir, name, logger):
-    height, width = image.shape[0], image.shape[1]
-    min_x = min(max(0, poly[0].item()), width)
-    max_x = min(max(0, poly[2].item()), width)
-    min_y = min(max(0, poly[1].item()), height)
-    max_y = min(max(0, poly[3].item()), height)
+    poly = poly.detach().cpu()
+    poly_qbox_rep = rbox2qbox(poly)
+    points = np.array(poly_qbox_rep.numpy() , dtype="float32").reshape(4, 2)
+    width, height = poly[2], poly[3]
+    mapping_points = np.float32([[0, 0],
+                        [0, height],
+                        [width , height ],
+                        [width , 0]])
+    M = cv2.getPerspectiveTransform(points, mapping_points)
+    patch = cv2.warpPerspective(image, M, (int(width), int(height))
+                                , flags=cv2.INTER_LINEAR)
+    # im = cv2.warpPerspective(image, M, (int(512), int(512))
+    #                          , flags=cv2.INTER_LINEAR)
 
-    # crop patch
-    if min_y > height or min_y >= max_y:
-        return
-    if min_x > width or min_x >= max_x:
-        return
-
-    patch = image[min_y:max_y, min_x:max_x, ...]
-    # put patch in its class folder
     try:
         patch_path = os.path.join(output_dir, class_name, name + '.png')
 
@@ -390,7 +372,6 @@ def extract_and_save_single_bbox(poly, image, class_name, output_dir, name, logg
         return
 
 def extract_and_save_bboxes(labels_names, predicted_boxes, predicted_boxes_labels, image, output_dir, img_id, logger):
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     unique_labels = torch.unique(predicted_boxes_labels)
     for unique_label in unique_labels:
         label = "background" if unique_label == -1 else labels_names[unique_label]
@@ -402,31 +383,48 @@ def extract_and_save_bboxes(labels_names, predicted_boxes, predicted_boxes_label
                                      name=f"{img_id}_{box_ind}", logger=logger)
 
 
-
-
-def assign_predicted_boxes_to_gt_boxes_using_hypothesis(bbox_assigner, predicted_boxes, data_batch, patch_size, img_id,
-                                                        labels_names, dota_obj, heatmap, extract_bbox_path, logger, plot=False,
-                                                        title="", target_dir=""):
-    predicted_boxes, _, _ = assign_predicted_boxes_to_gt_accord_intersection(bbox_assigner, predicted_boxes, data_batch,
-                                                                             img_id, dota_obj, heatmap, patch_size,
-                                                                             additional_patches_sizes=((11,21), (21,11)),
-                                                                             plot=plot, title=title, target_dir=target_dir)
-    assign_result, _ = assign_predicted_boxes_to_gt(bbox_assigner=bbox_assigner, predicted_boxes=predicted_boxes,
-                                                    data_batch=data_batch, patch_size=patch_size, img_id=img_id,
-                                                    dota_obj=dota_obj, heatmap=heatmap,
-                                                    filter_instances_accord_size=True,
-                                                    plot=plot, title=title, target_dir=target_dir)
+def assign_predicted_boxes_to_gt_boxes_and_save(bbox_assigner, regressor_results, gt_instances, img_id, image_path,
+                                                labels_names, extract_bbox_path, logger, plot=False,
+                                                title="", target_dir="", visualizer=None, train=True, val=False):
+    assign_result = assign_predicted_boxes_to_gt(bbox_assigner=bbox_assigner, regressor_results=regressor_results,
+                                                    gt_instances=gt_instances, img_id=img_id, image_path=image_path,
+                                                    plot=plot, title=title, target_dir=target_dir, visualizer=visualizer)
     # collect predicted_boxes labels and cut it out the images and save it in an appropriate folders
-    assigned_bboxes_indices_foreground = torch.nonzero(assign_result.gt_inds > 0)
-    assigned_bboxes_indices_background = torch.nonzero(assign_result.gt_inds == 0)
-    assigned_bboxes_indices_background = assigned_bboxes_indices_background[torch.randperm(
-        len(assigned_bboxes_indices_background))[:int(0.1 * len(assigned_bboxes_indices_background))]]
-    assigned_bboxes_indices = torch.cat((assigned_bboxes_indices_foreground, assigned_bboxes_indices_background), dim=0)
-    image = dota_obj.loadImgs(img_id)
-    image = cv2.resize(image[0], heatmap.shape)
-    predicted_boxes_labels = assign_result.labels[assigned_bboxes_indices]
-    extract_and_save_bboxes(labels_names=labels_names, predicted_boxes=predicted_boxes[assigned_bboxes_indices].squeeze(dim=1), predicted_boxes_labels=predicted_boxes_labels,
-                            image=image, output_dir=extract_bbox_path, img_id=img_id, logger=logger)
+    if train:
+        # sample bgs
+        assigned_bboxes_indices_foreground = torch.nonzero(assign_result.gt_inds > 0)
+        assigned_bboxes_indices_background = torch.nonzero(assign_result.gt_inds == 0)
+        assigned_bboxes_indices_background = assigned_bboxes_indices_background[torch.randperm(
+            len(assigned_bboxes_indices_background))[:int(0.1 * len(assigned_bboxes_indices_background))]]
+        assigned_bboxes_indices = torch.cat((assigned_bboxes_indices_foreground, assigned_bboxes_indices_background),
+                                            dim=0)
+        predicted_boxes_labels = assign_result.labels[assigned_bboxes_indices]
+        predicted_boxes = regressor_results[0].pred_instances.bboxes[assigned_bboxes_indices.squeeze(dim=1)]
+    elif val:
+        # sample not fgs
+        assigned_bboxes_indices_background = torch.nonzero(assign_result.labels == -1)
+        assigned_bboxes_indices_foreground = torch.nonzero(assign_result.labels != -1)
+        assigned_bboxes_indices_background = assigned_bboxes_indices_background[torch.randperm(
+            len(assigned_bboxes_indices_background))[:int(0.1 * len(assigned_bboxes_indices_background))]]
+        assigned_bboxes_indices = torch.cat(
+            (assigned_bboxes_indices_foreground, assigned_bboxes_indices_background),
+            dim=0)
+        predicted_boxes_labels = assign_result.labels[assigned_bboxes_indices]
+        predicted_boxes = regressor_results[0].pred_instances.bboxes[assigned_bboxes_indices.squeeze(dim=1)]
+    else:
+        predicted_boxes_labels = assign_result.labels
+        predicted_boxes = regressor_results[0].pred_instances.bboxes
+
+
+
+
+    img = cv2.imread(image_path)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+    extract_and_save_bboxes(labels_names=labels_names,
+                            predicted_boxes=predicted_boxes,
+                            predicted_boxes_labels=predicted_boxes_labels,
+                            image=img, output_dir=extract_bbox_path, img_id=img_id, logger=logger)
 
 def assign_predicted_boxes_to_gt_boxes_and_save_val_stage(bbox_assigner, predicted_boxes, data_batch, patch_size, img_id,
                                                         labels_names, dota_obj, heatmap, extract_bbox_path, logger,

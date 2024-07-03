@@ -1,22 +1,23 @@
 import os
+
+import dino.vision_transformer as vits
+import matplotlib.pyplot as plt
+import numpy as np
+import skimage.io
 import torch
 import torchvision
 from PIL import Image
-import numpy as np
-from torch import nn
-import matplotlib.pyplot as plt
-import dino.vision_transformer as vits
-from torchvision import transforms as pth_transforms
-import skimage.io
 from bg_subtractor_utils import calculate_patches_alg_heat_maps_for_k_values, plot_k_heat_maps, \
     plot_heat_map, ViTMode, ViTModelType, create_gt_attention
 from dino.visualize_attention import display_instances
+from torch import nn
+from torchvision import transforms as pth_transforms
 
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
 
 class BGSubtractionWithDinoVit:
-    def __init__(self, target_dir, vit_patch_size, vit_arch, vit_image_size, dota_obj, threshold, attention_num, layer_num,
+    def __init__(self, target_dir, vit_patch_size, vit_arch, vit_image_size, dota_obj, threshold, attention_num, layer_num=0,
                  pretrained_weights="", checkpoint_key="", model_mode=ViTMode.CLS_SELF_ATTENTION.value,
                  model_type=ViTModelType.DINO_MC.value):
         self.model = None
