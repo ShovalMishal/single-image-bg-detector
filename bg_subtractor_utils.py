@@ -294,7 +294,7 @@ def extract_patches_accord_heatmap(heatmap: np.ndarray, patch_size: tuple, img_i
     if plot:
 
         fig, ax = plt.subplots()
-        plt.imshow(heatmap)
+        plt.imshow(heatmap.detach().cpu().numpy())
         plt.colorbar()
         show_predicted_boxes(patches_tensor, ax)
 
