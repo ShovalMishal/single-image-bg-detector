@@ -250,7 +250,7 @@ def unravel_index(index, shape):
   return tuple(reversed(out))
 
 def extract_patches_accord_heatmap(heatmap: np.ndarray, patch_size: tuple, img_id: str, target_dir=None, threshold_percentage=85,
-                                   padding=True, plot=False, title="") -> np.ndarray:
+                                   padding=True, plot=False, title="", image_path="") -> np.ndarray:
     score_heatmap = conv_heatmap(patch_size=patch_size, heatmap=heatmap)
     threshold_value = torch.quantile(heatmap, threshold_percentage/100)
     heatmap_copy = heatmap.clone()
@@ -292,12 +292,22 @@ def extract_patches_accord_heatmap(heatmap: np.ndarray, patch_size: tuple, img_i
         max_index_matrix = unravel_index(argmax_index, heatmap_copy.shape)
     patches_tensor = torch.tensor(patches_list, device=device)
     if plot:
+        # show image with heatmap
+        plt.clf()
 
+        img = cv2.imread(image_path)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        plt.imshow(img)
+        plt.imshow(heatmap.detach().cpu().numpy(), alpha=.5)
+        plt.savefig(
+            os.path.join(target_dir, f"{img_id}_heatmap.png"))
+        # plt.colorbar()
+        #
+        # show image with heatmap and predicted boxes
         fig, ax = plt.subplots()
-        plt.imshow(heatmap.detach().cpu().numpy())
-        plt.colorbar()
+        plt.imshow(img)
+        plt.imshow(heatmap.detach().cpu().numpy(), alpha=.5)
         show_predicted_boxes(patches_tensor, ax)
-
         plt.savefig(
             os.path.join(target_dir, f"{img_id}_heatmap_with_{title}_predicted_boxes.png"))
     return patches_tensor, mask, patches_scores
@@ -347,8 +357,10 @@ def assign_predicted_boxes_to_gt(bbox_assigner, regressor_results, gt_instances,
                                   draw_text=False)
     return assign_result
 
-def extract_and_save_single_bbox(poly, image, class_name, output_dir, name, logger):
+def extract_and_save_single_bbox(poly, image, class_name, output_dir, name, logger, hashmap_locations=None):
     poly = poly.detach().cpu()
+    if isinstance(hashmap_locations, dict):
+        hashmap_locations[name] = poly.cpu()
     poly_qbox_rep = rbox2qbox(poly)
     points = np.array(poly_qbox_rep.numpy() , dtype="float32").reshape(4, 2)
     width, height = poly[2], poly[3]
@@ -371,7 +383,8 @@ def extract_and_save_single_bbox(poly, image, class_name, output_dir, name, logg
         logger.info(f"[FILE WRITE ERROR] The file {name} can't be saved, {error} \n")
         return
 
-def extract_and_save_bboxes(labels_names, predicted_boxes, predicted_boxes_labels, image, output_dir, img_id, logger):
+def extract_and_save_bboxes(labels_names, predicted_boxes, predicted_boxes_labels, image, output_dir, img_id, logger,
+                            hashmap_locations=None):
     unique_labels = torch.unique(predicted_boxes_labels)
     for unique_label in unique_labels:
         label = "background" if unique_label == -1 else labels_names[unique_label]
@@ -380,15 +393,16 @@ def extract_and_save_bboxes(labels_names, predicted_boxes, predicted_boxes_label
     for box_ind, box in enumerate(predicted_boxes):
         class_name = "background" if predicted_boxes_labels[box_ind].item() == -1 else labels_names[predicted_boxes_labels[box_ind].item()]
         extract_and_save_single_bbox(poly=box, image=image, class_name=class_name, output_dir=output_dir,
-                                     name=f"{img_id}_{box_ind}", logger=logger)
+                                     name=f"{img_id}_{box_ind}", logger=logger, hashmap_locations=hashmap_locations)
 
 
 def assign_predicted_boxes_to_gt_boxes_and_save(bbox_assigner, regressor_results, gt_instances, img_id, image_path,
                                                 labels_names, extract_bbox_path, logger, plot=False,
-                                                title="", target_dir="", visualizer=None, train=True, val=False):
+                                                title="", target_dir="", visualizer=None, train=True, val=False,
+                                                hashmap_locations=None):
     assign_result = assign_predicted_boxes_to_gt(bbox_assigner=bbox_assigner, regressor_results=regressor_results,
-                                                    gt_instances=gt_instances, img_id=img_id, image_path=image_path,
-                                                    plot=plot, title=title, target_dir=target_dir, visualizer=visualizer)
+                                                gt_instances=gt_instances, img_id=img_id, image_path=image_path,
+                                                plot=plot, title=title, target_dir=target_dir, visualizer=visualizer)
     # collect predicted_boxes labels and cut it out the images and save it in an appropriate folders
     if train:
         # sample bgs
@@ -415,16 +429,14 @@ def assign_predicted_boxes_to_gt_boxes_and_save(bbox_assigner, regressor_results
         predicted_boxes_labels = assign_result.labels
         predicted_boxes = regressor_results[0].pred_instances.bboxes
 
-
-
-
     img = cv2.imread(image_path)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
     extract_and_save_bboxes(labels_names=labels_names,
                             predicted_boxes=predicted_boxes,
                             predicted_boxes_labels=predicted_boxes_labels,
-                            image=img, output_dir=extract_bbox_path, img_id=img_id, logger=logger)
+                            image=img, output_dir=extract_bbox_path, img_id=img_id, logger=logger,
+                            hashmap_locations=hashmap_locations)
 
 def assign_predicted_boxes_to_gt_boxes_and_save_val_stage(bbox_assigner, predicted_boxes, data_batch, patch_size, img_id,
                                                         labels_names, dota_obj, heatmap, extract_bbox_path, logger,
