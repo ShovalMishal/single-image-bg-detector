@@ -258,14 +258,17 @@ def extract_patches_accord_heatmap(heatmap: np.ndarray, patch_size: tuple, img_i
     argmax_index = torch.argmax(heatmap_copy)
     max_index_matrix = unravel_index(argmax_index, heatmap_copy.shape)
     patches_list = []
-    patches_scores = []
+    patches_scores_conv = []
+    patches_scores=[]
     heatmap_size = heatmap.shape
     mask = np.zeros(heatmap_size)
     while curr_max_val > threshold_value:
         curr_bbox = calculate_box_by_size_and_centers_in_xyxy_format(patch_size, max_index_matrix, heatmap_size)
         patches_list.append(curr_bbox)
-        curr_score = score_heatmap[max_index_matrix[0], max_index_matrix[1]]
-        patches_scores.append(curr_score)
+        curr_conv_score = score_heatmap[max_index_matrix[0], max_index_matrix[1]]
+        patches_scores_conv.append(curr_conv_score.detach().cpu().item())
+        curr_score = heatmap[max_index_matrix[0], max_index_matrix[1]]
+        patches_scores.append(curr_score.detach().cpu().item())
 
         curr_patch_size = curr_bbox[3] - curr_bbox[1], curr_bbox[2] - curr_bbox[0]
         if padding:
@@ -310,7 +313,7 @@ def extract_patches_accord_heatmap(heatmap: np.ndarray, patch_size: tuple, img_i
         show_predicted_boxes(patches_tensor, ax)
         plt.savefig(
             os.path.join(target_dir, f"{img_id}_heatmap_with_{title}_predicted_boxes.png"))
-    return patches_tensor, mask, patches_scores
+    return patches_tensor, mask, patches_scores_conv, patches_scores
 
 
 def mask_img(imgid, dota_obj, mask):
@@ -357,10 +360,13 @@ def assign_predicted_boxes_to_gt(bbox_assigner, regressor_results, gt_instances,
                                   draw_text=False)
     return assign_result
 
-def extract_and_save_single_bbox(poly, image, class_name, output_dir, name, logger, hashmap_locations=None):
+def extract_and_save_single_bbox(poly, image, class_name, output_dir, name, logger, hashmap_locations=None, anomaly_scores=None):
     poly = poly.detach().cpu()
     if isinstance(hashmap_locations, dict):
-        hashmap_locations[name] = poly.cpu()
+        hashmap_locations[name] = {}
+        hashmap_locations[name]["poly"] = poly.cpu().numpy().tolist()
+        hashmap_locations[name]["anomaly_score"] = anomaly_scores[0]
+        hashmap_locations[name]["anomaly_score_conv"] = anomaly_scores[1]
     poly_qbox_rep = rbox2qbox(poly)
     points = np.array(poly_qbox_rep.numpy() , dtype="float32").reshape(4, 2)
     width, height = poly[2], poly[3]
@@ -384,7 +390,7 @@ def extract_and_save_single_bbox(poly, image, class_name, output_dir, name, logg
         return
 
 def extract_and_save_bboxes(labels_names, predicted_boxes, predicted_boxes_labels, image, output_dir, img_id, logger,
-                            hashmap_locations=None):
+                            hashmap_locations=None, scores_dict=None):
     unique_labels = torch.unique(predicted_boxes_labels)
     for unique_label in unique_labels:
         label = "background" if unique_label == -1 else labels_names[unique_label]
@@ -392,14 +398,20 @@ def extract_and_save_bboxes(labels_names, predicted_boxes, predicted_boxes_label
         os.makedirs(os.path.join(label_dir), exist_ok=True)
     for box_ind, box in enumerate(predicted_boxes):
         class_name = "background" if predicted_boxes_labels[box_ind].item() == -1 else labels_names[predicted_boxes_labels[box_ind].item()]
+        scores=None
+        if isinstance(scores_dict, dict):
+            curr_anomaly_score = scores_dict["patches_scores"][box_ind]
+            curr_anomaly_score_conv = scores_dict["patches_scores_conv"][box_ind]
+            scores = (curr_anomaly_score, curr_anomaly_score_conv)
         extract_and_save_single_bbox(poly=box, image=image, class_name=class_name, output_dir=output_dir,
-                                     name=f"{img_id}_{box_ind}", logger=logger, hashmap_locations=hashmap_locations)
+                                     name=f"{img_id}_{box_ind}", logger=logger, hashmap_locations=hashmap_locations,
+                                     anomaly_scores=scores)
 
 
 def assign_predicted_boxes_to_gt_boxes_and_save(bbox_assigner, regressor_results, gt_instances, img_id, image_path,
                                                 labels_names, extract_bbox_path, logger, plot=False,
                                                 title="", target_dir="", visualizer=None, train=True, val=False,
-                                                hashmap_locations=None):
+                                                hashmap_locations=None, scores_dict=None):
     assign_result = assign_predicted_boxes_to_gt(bbox_assigner=bbox_assigner, regressor_results=regressor_results,
                                                 gt_instances=gt_instances, img_id=img_id, image_path=image_path,
                                                 plot=plot, title=title, target_dir=target_dir, visualizer=visualizer)
@@ -436,7 +448,7 @@ def assign_predicted_boxes_to_gt_boxes_and_save(bbox_assigner, regressor_results
                             predicted_boxes=predicted_boxes,
                             predicted_boxes_labels=predicted_boxes_labels,
                             image=img, output_dir=extract_bbox_path, img_id=img_id, logger=logger,
-                            hashmap_locations=hashmap_locations)
+                            hashmap_locations=hashmap_locations, scores_dict=scores_dict)
 
 def assign_predicted_boxes_to_gt_boxes_and_save_val_stage(bbox_assigner, predicted_boxes, data_batch, patch_size, img_id,
                                                         labels_names, dota_obj, heatmap, extract_bbox_path, logger,
