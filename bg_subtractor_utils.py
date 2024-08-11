@@ -249,11 +249,19 @@ def unravel_index(index, shape):
     index = torch.div(index, dim, rounding_mode='floor')
   return tuple(reversed(out))
 
-def extract_patches_accord_heatmap(heatmap: np.ndarray, patch_size: tuple, img_id: str, target_dir=None, threshold_percentage=85,
-                                   padding=True, plot=False, title="", image_path="") -> np.ndarray:
+def calculate_threshold_value(heatmap, threshold_percentage, padding_mask):
+    non_zero_values = np.sum(padding_mask == False) / (padding_mask.size)
+    new_threshold_percentage = 100 - (100 - threshold_percentage) * non_zero_values
+    threshold_value = torch.quantile(heatmap, new_threshold_percentage / 100)
+    return threshold_value
+
+def extract_patches_accord_heatmap(heatmap: np.ndarray, patch_size: tuple, img_id: str, padding_mask: np.ndarray, target_dir=None,
+                                   threshold_percentage=85, padding=True, plot=False, title="", image_path="") -> np.ndarray:
     score_heatmap = conv_heatmap(patch_size=patch_size, heatmap=heatmap)
-    threshold_value = torch.quantile(heatmap, threshold_percentage/100)
+    threshold_value = calculate_threshold_value(heatmap, threshold_percentage, padding_mask)
     heatmap_copy = heatmap.clone()
+    # zero out the padding
+    heatmap_copy[padding_mask] = torch.zeros_like(heatmap_copy[padding_mask])
     curr_max_val = torch.max(heatmap_copy)
     argmax_index = torch.argmax(heatmap_copy)
     max_index_matrix = unravel_index(argmax_index, heatmap_copy.shape)
