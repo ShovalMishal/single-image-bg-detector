@@ -416,6 +416,21 @@ def extract_and_save_bboxes(labels_names, predicted_boxes, predicted_boxes_label
                                      anomaly_scores=scores)
 
 
+def save_id_gts(gt_instances, image_path, id_classes_names, id_class_labels, extract_bbox_path, logger, img_id):
+    box_ind=0
+    # data injection for train id classes dataset
+    for gt_ind, gt in enumerate(gt_instances):
+        if gt.labels[0].item() not in id_class_labels:
+            continue
+        curr_box = gt.bboxes[0]
+        img = cv2.imread(image_path)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        class_name = id_classes_names[id_class_labels.index(gt.labels[0].item())]
+        extract_and_save_single_bbox(poly=curr_box, image=img, class_name=class_name, output_dir=extract_bbox_path,
+                                     name=f"{img_id}_{box_ind}_gt", logger=logger)
+        box_ind += 1
+
+
 def assign_predicted_boxes_to_gt_boxes_and_save(bbox_assigner, regressor_results, gt_instances, img_id, image_path,
                                                 labels_names, extract_bbox_path, logger, plot=False,
                                                 title="", target_dir="", visualizer=None, train=True, val=False,
@@ -457,6 +472,8 @@ def assign_predicted_boxes_to_gt_boxes_and_save(bbox_assigner, regressor_results
                             predicted_boxes_labels=predicted_boxes_labels,
                             image=img, output_dir=extract_bbox_path, img_id=img_id, logger=logger,
                             hashmap_locations=hashmap_locations, scores_dict=scores_dict)
+
+
 
 def assign_predicted_boxes_to_gt_boxes_and_save_val_stage(bbox_assigner, predicted_boxes, data_batch, patch_size, img_id,
                                                         labels_names, dota_obj, heatmap, extract_bbox_path, logger,
