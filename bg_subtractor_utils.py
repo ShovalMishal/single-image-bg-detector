@@ -426,6 +426,8 @@ def save_id_gts(gt_instances, image_path, id_classes_names, id_class_labels, ext
         img = cv2.imread(image_path)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         class_name = id_classes_names[id_class_labels.index(gt.labels[0].item())]
+        label_dir = os.path.join(extract_bbox_path, class_name)
+        os.makedirs(os.path.join(label_dir), exist_ok=True)
         extract_and_save_single_bbox(poly=curr_box, image=img, class_name=class_name, output_dir=extract_bbox_path,
                                      name=f"{img_id}_{box_ind}_gt", logger=logger)
         box_ind += 1
