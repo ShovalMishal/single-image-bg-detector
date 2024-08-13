@@ -258,10 +258,11 @@ def calculate_threshold_value(heatmap, threshold_percentage, padding_mask):
 def extract_patches_accord_heatmap(heatmap: np.ndarray, patch_size: tuple, img_id: str, padding_mask: np.ndarray, target_dir=None,
                                    threshold_percentage=85, padding=True, plot=False, title="", image_path="") -> np.ndarray:
     score_heatmap = conv_heatmap(patch_size=patch_size, heatmap=heatmap)
-    threshold_value = calculate_threshold_value(heatmap, threshold_percentage, padding_mask)
-    heatmap_copy = heatmap.clone()
     # zero out the padding
+    heatmap[padding_mask] = torch.zeros_like(heatmap[padding_mask])
+    heatmap_copy = heatmap.clone()
     heatmap_copy[padding_mask] = torch.zeros_like(heatmap_copy[padding_mask])
+    threshold_value = calculate_threshold_value(heatmap, threshold_percentage, padding_mask)
     curr_max_val = torch.max(heatmap_copy)
     argmax_index = torch.argmax(heatmap_copy)
     max_index_matrix = unravel_index(argmax_index, heatmap_copy.shape)
@@ -275,7 +276,7 @@ def extract_patches_accord_heatmap(heatmap: np.ndarray, patch_size: tuple, img_i
         patches_list.append(curr_bbox)
         curr_conv_score = score_heatmap[max_index_matrix[0], max_index_matrix[1]]
         patches_scores_conv.append(curr_conv_score.detach().cpu().item())
-        curr_score = heatmap[max_index_matrix[0], max_index_matrix[1]]
+        curr_score = heatmap_copy[max_index_matrix[0], max_index_matrix[1]]
         patches_scores.append(curr_score.detach().cpu().item())
 
         curr_patch_size = curr_bbox[3] - curr_bbox[1], curr_bbox[2] - curr_bbox[0]
