@@ -2,6 +2,8 @@ import json
 import math
 import os
 from enum import Enum
+from typing import Union
+
 from matplotlib.patches import Polygon
 from matplotlib.collections import PatchCollection
 import cv2
@@ -345,28 +347,12 @@ def mask_img(imgid, dota_obj, mask):
 
 def assign_predicted_boxes_to_gt(bbox_assigner, regressor_results, gt_instances, img_id, image_path, plot=False, title="",
                                  target_dir="", visualizer=None):
-    formatted_predicted_patches = RotatedBoxes(regressor_results[0].pred_instances.bboxes)
+    formatted_predicted_patches = RotatedBoxes(regressor_results.pred_instances.bboxes)
     formatted_predicted_patches = InstanceData(priors=formatted_predicted_patches)
 
     assign_result = bbox_assigner.assign(
         formatted_predicted_patches.to(device), gt_instances.to(device))
 
-
-    if plot:
-        img = cv2.imread(image_path)
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        # show proposals and gts
-        results = regressor_results[0]
-        results.pred_instances.scores = torch.tensor([1] * len(results.pred_instances.bboxes))
-        results.pred_instances.labels = torch.tensor([0] * len(results.pred_instances.bboxes))
-        visualizer.add_datasample(name='result',
-                                  image=img,
-                                  data_sample=results.detach().cpu(),
-                                  draw_gt=True,
-                                  out_file=os.path.join(target_dir,
-                                                        img_id + "_regressor_results.png"),
-                                  wait_time=0,
-                                  draw_text=False)
     return assign_result
 
 def extract_and_save_single_bbox(poly, image, class_name, output_dir, name, logger, hashmap_locations=None, anomaly_scores=None):
@@ -374,8 +360,9 @@ def extract_and_save_single_bbox(poly, image, class_name, output_dir, name, logg
     if isinstance(hashmap_locations, dict):
         hashmap_locations[name] = {}
         hashmap_locations[name]["poly"] = poly.cpu().numpy().tolist()
-        hashmap_locations[name]["anomaly_score"] = anomaly_scores[0]
-        hashmap_locations[name]["anomaly_score_conv"] = anomaly_scores[1]
+        if anomaly_scores:
+            hashmap_locations[name]["anomaly_score"] = anomaly_scores[0]
+            hashmap_locations[name]["anomaly_score_conv"] = anomaly_scores[1]
     poly_qbox_rep = rbox2qbox(poly)
     points = np.array(poly_qbox_rep.numpy() , dtype="float32").reshape(4, 2)
     width, height = poly[2], poly[3]
@@ -419,11 +406,15 @@ def extract_and_save_bboxes(labels_names, predicted_boxes, predicted_boxes_label
 
 def save_id_gts(gt_instances, image_path, id_classes_names, id_class_labels, extract_bbox_path, logger, img_id):
     box_ind=0
+    gsd = os.path.splitext(img_id)[0].split("_")[-1]
+    gsd = float(gsd[0] + "." + gsd[1:])
+    if gsd >= 1:
+        return
     # data injection for train id classes dataset
     for gt_ind, gt in enumerate(gt_instances):
         if gt.labels[0].item() not in id_class_labels:
             continue
-        curr_box = gt.bboxes[0]
+        curr_box = gt.bboxes[0].tensor.squeeze()
         img = cv2.imread(image_path)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         class_name = id_classes_names[id_class_labels.index(gt.labels[0].item())]
@@ -434,15 +425,16 @@ def save_id_gts(gt_instances, image_path, id_classes_names, id_class_labels, ext
         box_ind += 1
 
 
-def assign_predicted_boxes_to_gt_boxes_and_save(bbox_assigner, regressor_results, gt_instances, img_id, image_path,
-                                                labels_names, extract_bbox_path, logger, plot=False,
-                                                title="", target_dir="", visualizer=None, train=True, val=False,
+def assign_predicted_boxes_to_gt_boxes_and_save(bbox_assigner, regressor_results, img_id, image_path,
+                                                labels_names, extract_bbox_path, logger,
+                                                dataset_type:Union["train", "val", "test"], plot=True,
+                                                title="", target_dir="", visualizer=None,
                                                 hashmap_locations=None, scores_dict=None):
     assign_result = assign_predicted_boxes_to_gt(bbox_assigner=bbox_assigner, regressor_results=regressor_results,
-                                                gt_instances=gt_instances, img_id=img_id, image_path=image_path,
+                                                gt_instances=regressor_results.gt_instances, img_id=img_id, image_path=image_path,
                                                 plot=plot, title=title, target_dir=target_dir, visualizer=visualizer)
     # collect predicted_boxes labels and cut it out the images and save it in an appropriate folders
-    if train:
+    if dataset_type == "train":
         # sample bgs
         assigned_bboxes_indices_foreground = torch.nonzero(assign_result.gt_inds > 0)
         assigned_bboxes_indices_background = torch.nonzero(assign_result.gt_inds == 0)
@@ -451,8 +443,8 @@ def assign_predicted_boxes_to_gt_boxes_and_save(bbox_assigner, regressor_results
         assigned_bboxes_indices = torch.cat((assigned_bboxes_indices_foreground, assigned_bboxes_indices_background),
                                             dim=0)
         predicted_boxes_labels = assign_result.labels[assigned_bboxes_indices]
-        predicted_boxes = regressor_results[0].pred_instances.bboxes[assigned_bboxes_indices.squeeze(dim=1)]
-    elif val:
+        predicted_boxes = regressor_results.pred_instances.bboxes[assigned_bboxes_indices.squeeze(dim=1)]
+    elif dataset_type == "val":
         # sample not fgs
         assigned_bboxes_indices_background = torch.nonzero(assign_result.labels == -1)
         assigned_bboxes_indices_foreground = torch.nonzero(assign_result.labels != -1)
@@ -462,13 +454,29 @@ def assign_predicted_boxes_to_gt_boxes_and_save(bbox_assigner, regressor_results
             (assigned_bboxes_indices_foreground, assigned_bboxes_indices_background),
             dim=0)
         predicted_boxes_labels = assign_result.labels[assigned_bboxes_indices]
-        predicted_boxes = regressor_results[0].pred_instances.bboxes[assigned_bboxes_indices.squeeze(dim=1)]
+        predicted_boxes = regressor_results.pred_instances.bboxes[assigned_bboxes_indices.squeeze(dim=1)]
     else:
         predicted_boxes_labels = assign_result.labels
-        predicted_boxes = regressor_results[0].pred_instances.bboxes
+        predicted_boxes = regressor_results.pred_instances.bboxes
 
     img = cv2.imread(image_path)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+    if plot:
+        # show proposals and gts
+        results = regressor_results
+        del results.pred_instances.bboxes
+        results.pred_instances.bboxes=predicted_boxes
+        results.pred_instances.scores = torch.tensor([1] * len(results.pred_instances.bboxes))
+        results.pred_instances.labels = torch.tensor([0] * len(results.pred_instances.bboxes))
+        visualizer.add_datasample(name='result',
+                                  image=img,
+                                  data_sample=results.detach().cpu(),
+                                  draw_gt=True,
+                                  out_file=os.path.join(target_dir,
+                                                        img_id + "_regressor_results.png"),
+                                  wait_time=0,
+                                  draw_text=False)
 
     extract_and_save_bboxes(labels_names=labels_names,
                             predicted_boxes=predicted_boxes,
