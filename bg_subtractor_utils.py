@@ -366,6 +366,8 @@ def extract_and_save_single_bbox(poly, image, class_name, output_dir, name, logg
     poly_qbox_rep = rbox2qbox(poly)
     points = np.array(poly_qbox_rep.numpy() , dtype="float32").reshape(4, 2)
     width, height = poly[2], poly[3]
+    if int(width) == 0 or int(height) == 0:
+        return False
     mapping_points = np.float32([[0, 0],
                         [0, height],
                         [width , height ],
@@ -381,9 +383,10 @@ def extract_and_save_single_bbox(poly, image, class_name, output_dir, name, logg
 
         patch_img = Image.fromarray(patch)
         patch_img.save(patch_path)
+        return True
     except Exception as error:
         logger.info(f"[FILE WRITE ERROR] The file {name} can't be saved, {error} \n")
-        return
+        return False
 
 def extract_and_save_bboxes(labels_names, predicted_boxes, predicted_boxes_labels, image, output_dir, img_id, logger,
                             hashmap_locations=None, scores_dict=None):
@@ -420,9 +423,9 @@ def save_id_gts(gt_instances, image_path, id_classes_names, id_class_labels, ext
         class_name = id_classes_names[id_class_labels.index(gt.labels[0].item())]
         label_dir = os.path.join(extract_bbox_path, class_name)
         os.makedirs(os.path.join(label_dir), exist_ok=True)
-        extract_and_save_single_bbox(poly=curr_box, image=img, class_name=class_name, output_dir=extract_bbox_path,
+        save_img=extract_and_save_single_bbox(poly=curr_box, image=img, class_name=class_name, output_dir=extract_bbox_path,
                                      name=f"{img_id}_{box_ind}_gt", logger=logger)
-        box_ind += 1
+        box_ind += 1 if save_img else 0
 
 
 def assign_predicted_boxes_to_gt_boxes_and_save(bbox_assigner, regressor_results, img_id, image_path,
