@@ -312,6 +312,7 @@ def extract_patches_accord_heatmap(heatmap: np.ndarray, patch_size: tuple, img_i
         img = cv2.imread(image_path)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         plt.imshow(img)
+        plt.axis(False)
         plt.imshow(heatmap.detach().cpu().numpy(), alpha=.5)
         plt.savefig(
             os.path.join(target_dir, f"{img_id}_heatmap.png"))
